@@ -11,6 +11,12 @@ Reviews the local development environment after a task (or at any time) and dete
 
 [!--lang:*-->
 
+<!-- cucardas -->
+[![npm-version](https://img.shields.io/npm/v/bussing.svg)](https://npmjs.org/package/bussing)
+[![downloads](https://img.shields.io/npm/dm/bussing.svg)](https://npmjs.org/package/bussing)
+[![build](https://github.com/ari-dc-uba-ar/bussing/actions/workflows/build-and-test.yml/badge.svg)](https://github.com/ari-dc-uba-ar/bussing/actions/workflows/build-and-test.yml)
+[![qa-control](https://github.com/ari-dc-uba-ar/bussing/actions/workflows/qa-control.yml/badge.svg)](https://github.com/ari-dc-uba-ar/bussing/actions/workflows/qa-control.yml)
+
 <!--multilang buttons-->
 
 idioma: ![castellano](https://raw.githubusercontent.com/codenautas/multilang/master/img/lang-es.png)

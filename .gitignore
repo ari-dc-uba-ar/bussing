@@ -150,3 +150,10 @@ vite.config.ts.timestamp-*
 
 # bussing: compiled tests (not distributed)
 test-run/
+
+# Claude: configuración de trabajo local, no es parte del repo
+.claude/
+
+# archivos locales (qa-control)
+local-*
+*-local.*
