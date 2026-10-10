@@ -1,6 +1,6 @@
 {
   "name": "bussing",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Revisa el ambiente local de repositorios después de una tarea: cambios sin commitear o pushear, versiones sin subir o publicar, dependencias cruzadas desactualizadas e instalaciones contaminadas por npm link o devel-sync",
   "author": "ari.dc.uba.ar",
   "license": "MIT",
