@@ -1,0 +1,252 @@
+#!/usr/bin/env node
+// Línea de comandos de bussing. Es el único módulo que usa cleye y process.
+
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { basename, dirname, join, resolve } from 'node:path';
+import { cli } from 'cleye';
+import { guarantee, is, type Description, type GuaranteedType } from 'guarantee-type';
+import { load } from 'js-yaml';
+import { DEFAULT_REGISTRY_URL, createNpmRegistry, reviewEnvironment } from './bussing.js';
+import type { BussingOptions, ProblemCategory, BussingReport, CleanupStep, Problem, RepoReport, Warning } from './bussing.js';
+
+export const EXIT_CODE = {
+    clean: 0,
+    error: 1,
+    problems: 2,
+} as const;
+
+/** Archivo opcional, en la carpeta del usuario, con valores por omisión para los parámetros. */
+const DEFAULTS_FILE_NAME = '.bussing.yaml';
+
+/** Cómo se nombra el archivo de valores por omisión en los mensajes y en la ayuda. */
+export const DEFAULTS_FILE_LABEL = `~/${DEFAULTS_FILE_NAME}`;
+
+export function defaultsPath(): string {
+    return join(homedir(), DEFAULTS_FILE_NAME);
+}
+
+/** Parámetros de la línea de comandos. Las mismas claves se pueden usar en el archivo de valores por omisión. */
+const flags = {
+    path: {
+        type: [String],
+        alias: 'p',
+        description: 'Carpeta raíz a revisar; se puede repetir (cada subcarpeta con package.json es un repositorio)',
+    },
+    ignore: {
+        type: [String],
+        description: 'Nombre de una subcarpeta que no se revisa; se puede repetir',
+    },
+    registry: {
+        type: String,
+        description: `URL del registro de npm (por omisión ${DEFAULT_REGISTRY_URL})`,
+    },
+    json: {
+        type: Boolean,
+        description: 'Muestra el informe completo en JSON',
+    },
+} as const;
+
+type FlagName = keyof typeof flags;
+
+/** Tipo de cada clave del archivo de valores por omisión: una por parámetro (el compilador verifica que sean las mismas). */
+const defaultsFields = {
+    // una carpeta sola o una lista
+    path: { optional: is.union([is.string, is.array.string]) },
+    ignore: { optional: is.union([is.string, is.array.string]) },
+    registry: is.optional.string,
+    json: is.optional.boolean,
+} satisfies Record<FlagName, Description>;
+
+const defaultsDescription = is.object(defaultsFields);
+
+type DefaultsFile = GuaranteedType<typeof defaultsDescription>;
+
+/** Valores por omisión ya normalizados: `path` e `ignore` siempre son listas. */
+export type Defaults = Omit<DefaultsFile, 'path' | 'ignore'> & { path?: string[]; ignore?: string[] };
+
+export interface CliOptions {
+    roots: string[];
+    ignore: string[];
+    registry: string;
+    json: boolean;
+}
+
+
+/** Versión del package.json del propio paquete: el primero que se encuentra subiendo desde la carpeta de este módulo. */
+function packageVersion(): string {
+    let dir = import.meta.dirname;
+    while (!existsSync(join(dir, 'package.json'))) {
+        const parent = dirname(dir);
+        if (parent === dir) throw new Error('No se encontró el package.json de bussing');
+        dir = parent;
+    }
+    return guarantee(is.object({ version: is.string }), JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))).version;
+}
+
+/**
+ * Lee el archivo de valores por omisión. Si no existe o está vacío no hay valores por omisión.
+ * `label` es el nombre del archivo en los mensajes de error.
+ */
+export function readDefaults(file: string, label: string): Defaults {
+    if (!existsSync(file)) return {};
+    const text = readFileSync(file, 'utf8');
+    if (text.trim() === '') return {};
+    let content: unknown;
+    try {
+        content = load(text);
+    } catch (err) {
+        throw new Error(`${label} no es un YAML válido (${err instanceof Error ? err.message : String(err)})`);
+    }
+    if (content === undefined || content === null) return {};
+    if (typeof content !== 'object' || Array.isArray(content)) throw new Error(`${label} no contiene claves y valores`);
+    const unknownKeys = Object.keys(content).filter(function (key) { return !(key in flags); });
+    if (unknownKeys.length > 0) {
+        throw new Error(`${label} tiene claves desconocidas: ${unknownKeys.join(', ')} (las claves válidas son: ${Object.keys(flags).join(', ')})`);
+    }
+    let values: DefaultsFile;
+    try {
+        values = guarantee(defaultsDescription, content);
+    } catch (err) {
+        throw new Error(`${label} tiene valores de tipo incorrecto (${err instanceof Error ? err.message : String(err)})`);
+    }
+    const { path, ignore, ...others } = values;
+    const defaults: Defaults = others;
+    if (path !== undefined) defaults.path = typeof path === 'string' ? [path] : path;
+    if (ignore !== undefined) defaults.ignore = typeof ignore === 'string' ? [ignore] : ignore;
+    return defaults;
+}
+
+/** Interpreta los argumentos. cleye muestra la ayuda y termina el proceso ante `--help`, `--version` o un flag desconocido. */
+export function parseArgs(argv: string[], defaults: Defaults): CliOptions {
+    const parsed = cli({
+        name: 'bussing',
+        version: packageVersion(),
+        flags,
+        strictFlags: true,
+        help: {
+            description: 'Revisa los repositorios locales y muestra los que quedaron desprolijos y el orden en que conviene limpiarlos.\n' +
+                `Los valores por omisión de los parámetros se pueden definir en ${DEFAULTS_FILE_LABEL} (las claves son los nombres de los parámetros).\n` +
+                `Códigos de salida: ${EXIT_CODE.clean} sin problemas, ${EXIT_CODE.error} error, ${EXIT_CODE.problems} hay problemas.`,
+            examples: ['bussing --path ../repos --path ../otros-repos --ignore repo-viejo', 'bussing --json'],
+        },
+    }, undefined, argv);
+    // las carpetas relativas son relativas a la carpeta actual, vengan de la línea de comandos o del archivo
+    const roots = (parsed.flags.path.length > 0 ? parsed.flags.path : defaults.path ?? []).map(function (path) { return resolve(path); });
+    if (roots.length === 0) {
+        throw new Error(`Falta indicar la carpeta con --path o definir los parámetros predeterminados en ${DEFAULTS_FILE_LABEL}`);
+    }
+    return {
+        roots,
+        ignore: parsed.flags.ignore.length > 0 ? parsed.flags.ignore : defaults.ignore ?? [],
+        registry: parsed.flags.registry ?? defaults.registry ?? DEFAULT_REGISTRY_URL,
+        json: parsed.flags.json ?? defaults.json ?? false,
+    };
+}
+
+const MAX_LISTED = 5;
+
+function listSome(items: string[]): string {
+    return items.slice(0, MAX_LISTED).join(', ') + (items.length > MAX_LISTED ? `, … (${items.length - MAX_LISTED} más)` : '');
+}
+
+function plural(count: number, singular: string, pluralForm: string): string {
+    return `${count} ${count === 1 ? singular : pluralForm}`;
+}
+
+export function describeProblem(problem: Problem): string {
+    switch (problem.kind) {
+        case 'uncommitted':
+            return `${plural(problem.files.length, 'archivo sin commitear', 'archivos sin commitear')}: ${listSome(problem.files)}`;
+        case 'unpushed':
+            return plural(problem.commits, 'commit sin pushear', 'commits sin pushear');
+        case 'no-upstream':
+            return `la rama ${problem.branch} no tiene upstream`;
+        case 'not-published':
+            return `el paquete no está publicado en npm (versión local ${problem.version})`;
+        case 'unpublished-version':
+            return `versión ${problem.version} sin publicar (en npm: ${problem.latest ?? 'sin latest'})`;
+        case 'version-not-bumped':
+            return `versión ${problem.version} sin subir: ${plural(problem.commitsAfterPublish, 'commit posterior', 'commits posteriores')} a la publicación`;
+        case 'outdated-dependency':
+            return `dependencia desactualizada: ${problem.dependency} "${problem.declared}" (${problem.field}), versión local ${problem.local}`;
+        case 'linked-dependency':
+            return `node_modules/${problem.dependency} es un enlace a ${problem.target}`;
+        case 'copied-dependency':
+            return `node_modules/${problem.dependency} no coincide con la versión publicada ${problem.version}` +
+                (problem.installedVersion !== problem.version ? ` (el package.json instalado dice ${problem.installedVersion ?? '?'})` : '') + ': ' +
+                listSome(problem.differences.map(function (difference) { return `${difference.path} (${difference.kind})`; }));
+    }
+}
+
+function describeWarning(warning: Warning): string {
+    return `advertencia (${warning.check}): ${warning.message}`;
+}
+
+function describeRepo(repo: RepoReport): string[] {
+    const title = repo.name === null ? repo.dir : `${repo.name}${repo.version === null ? '' : '@' + repo.version}  ${repo.dir}`;
+    return [
+        title,
+        ...repo.problems.map(function (problem) { return '  - ' + describeProblem(problem); }),
+        ...repo.warnings.map(function (warning) { return '  ? ' + describeWarning(warning); }),
+    ];
+}
+
+export const CATEGORY_LABEL: Record<ProblemCategory, string> = {
+    'uncommitted': 'falta commitear',
+    'unpushed': 'falta pushear',
+    'altered-node-modules': 'node_modules alterado',
+    'outdated-dependencies': 'dependencias desactualizadas',
+    'version-not-bumped': 'falta subir versión',
+    'unpublished': 'falta publicar',
+};
+
+function describeStep(step: CleanupStep): string {
+    const details: string[] = [];
+    if (step.dependsOn.length > 0) details.push('depende de ' + step.dependsOn.join(', '));
+    if (step.inCycleWith.length > 0) details.push('ciclo con ' + step.inCycleWith.join(', '));
+    const folder = basename(step.dir);
+    const label = step.mainProblem === null ? 'por dependencia' : CATEGORY_LABEL[step.mainProblem];
+    return `  ${step.level + 1}. ${step.name}${folder === step.name ? '' : ` [${folder}]`}  ${label}` + (details.length > 0 ? `  (${details.join('; ')})` : '');
+}
+
+export function formatReport(report: BussingReport): string {
+    const withProblems = report.repos.filter(function (repo) { return repo.problems.length > 0; });
+    const withWarningsOnly = report.repos.filter(function (repo) { return repo.problems.length === 0 && repo.warnings.length > 0; });
+    const lines: string[] = [`${plural(withProblems.length, 'repositorio con problemas', 'repositorios con problemas')} de ${report.repos.length} revisados` +
+        (report.ignored.length > 0 ? ` (${plural(report.ignored.length, 'ignorado', 'ignorados')}: ${report.ignored.map(function (dir) { return basename(dir); }).join(', ')})` : '')];
+    for (const repo of [...withProblems, ...withWarningsOnly]) lines.push('', ...describeRepo(repo));
+    if (report.cleanupOrder.length > 0) {
+        lines.push('', 'Orden de limpieza (los del mismo número no dependen entre sí):', ...report.cleanupOrder.map(describeStep));
+    }
+    if (report.warnings.length > 0) lines.push('', ...report.warnings.map(describeWarning));
+    return lines.join('\n') + '\n';
+}
+
+export async function main(argv: string[]): Promise<number> {
+    try {
+        const options = parseArgs(argv, readDefaults(defaultsPath(), DEFAULTS_FILE_LABEL));
+        const reviewOptions: BussingOptions = {
+            roots: options.roots,
+            ignore: options.ignore,
+            registry: createNpmRegistry(options.registry),
+            log: function (message) { if (process.stderr.isTTY) process.stderr.write(`\r\u001b[K${message}`); },
+        };
+        const report = await reviewEnvironment(reviewOptions);
+        if (process.stderr.isTTY) process.stderr.write('\r\u001b[K');
+        process.stdout.write(options.json ? JSON.stringify(report, null, 2) + '\n' : formatReport(report));
+        return report.repos.some(function (repo) { return repo.problems.length > 0; }) ? EXIT_CODE.problems : EXIT_CODE.clean;
+    } catch (err) {
+        if (process.stderr.isTTY) process.stderr.write('\r\u001b[K');
+        process.stderr.write(`bussing: ${err instanceof Error ? err.message : String(err)}\n`);
+        return EXIT_CODE.error;
+    }
+}
+
+// Solo se ejecuta al invocarlo como programa (no al importarlo desde los tests)
+if (import.meta.main) {
+    main(process.argv.slice(2)).then(function (code) { process.exitCode = code; }, function (err: unknown) {
+        process.stderr.write(`${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
+        process.exitCode = EXIT_CODE.error;
+    });
+}

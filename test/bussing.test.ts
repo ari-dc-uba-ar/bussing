@@ -1,0 +1,58 @@
+import { strict as assert } from 'node:assert';
+import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { reviewEnvironment } from '../src/bussing.js';
+import { fakeRegistry, gitRepo, packageJson, packument, tempDir, writeFiles } from './helpers.js';
+
+describe('bussing', function () {
+    it('informa con claridad las carpetas inexistentes o que no son carpetas', async function () {
+        const dir = await tempDir();
+        await writeFile(join(dir, 'archivo'), '');
+        await assert.rejects(reviewEnvironment({ roots: [] }), /No se indicó ninguna carpeta/);
+        await assert.rejects(reviewEnvironment({ roots: [join(dir, 'no-existe')] }), /La carpeta .*no-existe no existe/);
+        await assert.rejects(reviewEnvironment({ roots: [join(dir, 'archivo')] }), /archivo no es una carpeta/);
+    });
+
+    it('reviewEnvironment revisa los repositorios y arma el orden de limpieza', async function () {
+        const root = await tempDir();
+        const baseHead = await gitRepo(join(root, 'base'), { 'package.json': packageJson({ name: 'base', version: '1.1.0' }), '.gitignore': 'node_modules\n' });
+        await gitRepo(join(root, 'app'), { 'package.json': packageJson({ name: 'app', version: '1.0.0', private: true, dependencies: { base: '^1.0.0' } }) });
+        await gitRepo(join(root, 'dup1'), { 'package.json': packageJson({ name: 'dup', version: '1.0.0', private: true }) });
+        await gitRepo(join(root, 'dup2'), { 'package.json': packageJson({ name: 'dup', version: '1.0.0', private: true }) });
+        await writeFiles(join(root, 'roto'), { 'package.json': '{ no es json' });
+        await writeFiles(join(root, 'no-es-repo'), { 'otro.txt': '' });
+        const registry = fakeRegistry({ base: packument('base', { '1.0.0': { gitHead: baseHead } }, '1.0.0') });
+        const messages: string[] = [];
+        const report = await reviewEnvironment({ roots: [root], registry, log: function (message) { messages.push(message); } });
+        assert.deepEqual(report.repos.map(function (repo) { return [repo.name, repo.problems.map(function (p) { return p.kind; })]; }), [
+            ['app', ['no-upstream', 'outdated-dependency']],
+            ['base', ['no-upstream', 'unpublished-version']],
+            ['dup', ['no-upstream']],
+            ['dup', ['no-upstream']],
+            [null, []],
+        ]);
+        assert.match(report.repos[4]?.warnings[0]?.message ?? '', /no se pudo leer package.json/);
+        assert.deepEqual(report.cleanupOrder.map(function (step) { return [step.level, step.name]; }), [[0, 'base'], [0, 'dup'], [0, 'dup'], [1, 'app']]);
+        assert.match(report.warnings[0]?.message ?? '', /el paquete dup está en varios repositorios/);
+        assert.equal(messages[0], '5 repositorios encontrados');
+    });
+
+    it('no revisa las subcarpetas indicadas en ignore', async function () {
+        const root = await tempDir();
+        await gitRepo(join(root, 'x'), { 'package.json': packageJson({ name: 'x', version: '1.0.0', private: true }) });
+        await gitRepo(join(root, 'viejo'), { 'package.json': packageJson({ name: 'x', version: '0.1.0', private: true }) });
+        const report = await reviewEnvironment({ roots: [root], ignore: ['viejo', 'no-esta'], registry: fakeRegistry({}) });
+        assert.deepEqual(report.repos.map(function (repo) { return repo.dir; }), [join(root, 'x')]);
+        assert.deepEqual(report.ignored, [join(root, 'viejo')]);
+        assert.deepEqual(report.warnings, [{ check: 'repo', message: 'ninguna carpeta de repositorio se llama no-esta (ignore)' }]);
+    });
+
+    it('un control que falla se informa como advertencia', async function () {
+        const root = await tempDir();
+        await gitRepo(join(root, 'x'), { 'package.json': packageJson({ name: 'x', version: '1.0.0' }) });
+        const registry = fakeRegistry({});
+        registry.getPackument = async function () { throw new Error('sin red'); };
+        const report = await reviewEnvironment({ roots: [root], registry });
+        assert.deepEqual(report.repos[0]?.warnings, [{ check: 'publication', message: 'falló el control: sin red' }]);
+    });
+});
