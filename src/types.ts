@@ -113,6 +113,11 @@ export interface CleanupStep {
     level: number;
     /** Categoría del problema propio más grave; `null` si está en la lista solo por sus dependencias. */
     mainProblem: ProblemCategory | null;
+    /**
+     * Si está en la lista solo por sus dependencias (`mainProblem` es `null`): el campo más grave por el que depende de un
+     * repositorio con problemas que llegan a quien lo usa. `null` si tiene problemas propios.
+     */
+    dependencyField: DependencyField | null;
     /** Repositorios de la lista de limpieza de los que depende. */
     dependsOn: string[];
     /** Repositorios con los que forma un ciclo de dependencias fuertes (vacío si no hay ciclo). */

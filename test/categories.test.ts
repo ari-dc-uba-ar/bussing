@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert';
-import { mainCategory } from '../dist/categories.js';
-import type { Problem } from '../dist/types.js';
+import { mainCategory } from '../src/categories.js';
+import type { Problem } from '../src/types.js';
 
 describe('mainCategory', function () {
     const nobody = function (): boolean { return false; };

@@ -1,9 +1,9 @@
 import { strict as assert } from 'node:assert';
 import { symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { checkCrossDependencies, checkGit, checkInstallation, checkPublication, compareWithTarball, installedBinContent } from '../dist/checks.js';
-import { getState } from '../dist/git.js';
-import { parsePackageJson } from '../dist/repos.js';
+import { checkCrossDependencies, checkGit, checkInstallation, checkPublication, compareWithTarball, installedBinContent } from '../src/checks.js';
+import { getState } from '../src/git.js';
+import { parsePackageJson } from '../src/repos.js';
 import { addRemote, fakeRegistry, filesMap, git, gitRepo, packageJson, packument, tempDir, writeFiles } from './helpers.js';
 
 describe('checks', function () {

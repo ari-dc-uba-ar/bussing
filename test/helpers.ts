@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import type { Packument, Registry } from '../dist/types.js';
+import type { Packument, Registry } from '../src/types.js';
 
 export async function tempDir(): Promise<string> {
     return mkdtemp(join(tmpdir(), 'bussing-test-'));

@@ -67,7 +67,7 @@ For each dependency in `node_modules`:
 
 ### 5. Cleanup order
 
-With the untidy repositories and those that depend on them (even if they are clean) a topological order is built: first the ones that do not depend on any other repository of the list. For each repository the reason it is on the list is shown (its own problems, or which dependency forces it to be updated).
+With the untidy repositories a topological order is built: first the ones that do not depend on any other repository of the list. Those that depend on a repository whose problems reach its users also enter, marked as "by dependency" (with the field suffix): uncommitted or unpushed changes, version not bumped or not published, or outdated production, peer or optional dependencies. Outdated devDependencies and altered node_modules do not reach the package's users. For each repository the reason it is on the list is shown.
 
 `dependencies`, `optionalDependencies` and `peerDependencies` are strong dependencies: they define which repositories enter the list and are always respected in the order. `devDependencies` are weak: they are respected unless they close a cycle, because among one's own packages they form cycles (for example, qa-control is a devDependency of libraries it depends on). Those that would close a cycle are deferred: the step shows it and that dependency stays outdated until a later review. With `--priority package=number` (it can be repeated; 0 by default) you decide which weak dependencies are respected first: higher numbers are respected earlier and lower numbers are the first to be deferred. If there is a cycle of strong dependencies, its members are placed in the same step and the cycle is shown.
 

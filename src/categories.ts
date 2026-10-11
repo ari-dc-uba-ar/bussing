@@ -43,6 +43,31 @@ export const DEPENDENCY_CATEGORY: Record<DependencyField, { waiting: ProblemCate
     'devDependencies': { waiting: 'waiting-dev-dependencies', outdated: 'outdated-dev-dependencies' },
 };
 
+/**
+ * Si el problema llega a quien usa el paquete (y por lo tanto los repositorios que dependen de él entran en la lista de
+ * limpieza). No llegan las devDependencies desactualizadas ni node_modules alterado (es la instalación local, no el contenido).
+ */
+export const REACHES_DEPENDENTS: Record<ProblemCategory, boolean> = {
+    'uncommitted': true,
+    'unpushed': true,
+    'altered-node-modules': false,
+    'waiting-dependencies': true,
+    'outdated-dependencies': true,
+    'waiting-peer-dependencies': true,
+    'outdated-peer-dependencies': true,
+    'waiting-optional-dependencies': true,
+    'outdated-optional-dependencies': true,
+    'waiting-dev-dependencies': false,
+    'outdated-dev-dependencies': false,
+    'version-not-bumped': true,
+    'unpublished': true,
+};
+
+/** Gravedad de un campo de dependencias (menor es más grave), según el lugar de sus categorías en `PROBLEM_CATEGORIES`. */
+export function fieldGravity(field: DependencyField): number {
+    return PROBLEM_CATEGORIES.indexOf(DEPENDENCY_CATEGORY[field].outdated);
+}
+
 /** Categoría de un problema. Una dependencia desactualizada es `waiting-*` si hay que esperarla (`mustWait`). */
 export function problemCategory(problem: Problem, mustWait: (name: string) => boolean): ProblemCategory {
     if (problem.kind === 'outdated-dependency') {

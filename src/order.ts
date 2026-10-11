@@ -1,8 +1,10 @@
 // Orden de limpieza: repositorios con problemas y los que dependen de ellos, en orden topológico.
-// Las dependencias fuertes (dependencies, optionalDependencies, peerDependencies) definen quién entra en la lista y se
-// respetan siempre; las débiles (devDependencies) solo ordenan, y se descartan si cierran un ciclo.
+// Entran los repositorios con problemas propios y, por sus dependencias fuertes (dependencies, optionalDependencies,
+// peerDependencies), los que dependen de un repositorio con problemas que llegan a quien lo usa. Las dependencias fuertes se
+// respetan siempre en el orden; las débiles (devDependencies) solo ordenan, y se descartan si cierran un ciclo.
 
-import type { CleanupStep, ProblemCategory } from './types.js';
+import { fieldGravity } from './categories.js';
+import type { CleanupStep, DependencyField, ProblemCategory } from './types.js';
 import { defined, mustGet } from './util.js';
 
 export interface OrderNode {
@@ -11,8 +13,10 @@ export interface OrderNode {
     name: string;
     /** Categoría del problema propio más grave; `null` si no tiene problemas propios. */
     mainProblem: ProblemCategory | null;
-    /** Carpetas de los repositorios revisados de los que depende (dependencias fuertes: siempre se respetan en el orden). */
-    dependsOn: string[];
+    /** Si tiene algún problema que llega a quien usa el paquete (ver `REACHES_DEPENDENTS`). */
+    reachesDependents: boolean;
+    /** Repositorios revisados de los que depende (dependencias fuertes: siempre se respetan en el orden), con el campo más grave. */
+    dependsOn: { dir: string; field: DependencyField }[];
     /** Carpetas de los repositorios revisados de los que depende como devDependency (débiles: se respetan salvo que cierren un ciclo). */
     weakDependsOn: string[];
 }
@@ -77,20 +81,24 @@ export function computeCleanupOrder(nodes: OrderNode[], priority: ReadonlyMap<st
     const byDir = new Map(nodes.map(function (node) { return [node.dir, node] as const; }));
     const dependents = new Map<string, string[]>();
     for (const node of nodes) {
-        for (const dep of node.dependsOn) dependents.set(dep, [...(dependents.get(dep) ?? []), node.dir]);
+        for (const dep of node.dependsOn) dependents.set(dep.dir, [...(dependents.get(dep.dir) ?? []), node.dir]);
     }
     // Los repositorios con problemas propios y, transitivamente por las dependencias fuertes, los que dependen de ellos
-    const included = new Set<string>();
-    const pending = nodes.filter(function (node) { return node.mainProblem !== null; }).map(function (node) { return node.dir; });
+    // Entran los que tienen problemas propios; los que dependen (transitivamente) de uno cuyos problemas llegan a quien lo usa
+    // entran también y, a su vez, hacen entrar a los que dependen de ellos
+    const included = new Set(nodes.filter(function (node) { return node.mainProblem !== null; }).map(function (node) { return node.dir; }));
+    const reaching = new Set<string>();
+    const pending = nodes.filter(function (node) { return node.reachesDependents; }).map(function (node) { return node.dir; });
     while (pending.length > 0) {
         const dir = defined(pending.pop(), 'pendiente');
-        if (included.has(dir)) continue;
+        if (reaching.has(dir)) continue;
+        reaching.add(dir);
         included.add(dir);
         pending.push(...(dependents.get(dir) ?? []));
     }
     const dirs = [...included].sort();
     const strongEdges = new Map(dirs.map(function (dir) {
-        return [dir, mustGet(byDir, dir).dependsOn.filter(function (dep) { return included.has(dep); })] as const;
+        return [dir, mustGet(byDir, dir).dependsOn.map(function (dep) { return dep.dir; }).filter(function (dep) { return included.has(dep); })] as const;
     }));
     // Los ciclos de dependencias fuertes forman un solo paso
     const component = stronglyConnectedComponents(dirs, strongEdges);
@@ -148,6 +156,10 @@ export function computeCleanupOrder(nodes: OrderNode[], priority: ReadonlyMap<st
             dir,
             level: levelOf(id),
             mainProblem: node.mainProblem,
+            dependencyField: node.mainProblem !== null ? null : node.dependsOn
+                .filter(function (dep) { return reaching.has(dep.dir); })
+                .map(function (dep) { return dep.field; })
+                .sort(function (a, b) { return fieldGravity(a) - fieldGravity(b); })[0] ?? null,
             dependsOn: names([...new Set(deps)]),
             deferred: names(mustGet(deferredWeak, dir)),
             inCycleWith: names(dirs.filter(function (other) { return other !== dir && mustGet(component, other) === id; })),

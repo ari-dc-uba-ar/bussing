@@ -1,9 +1,16 @@
 import { strict as assert } from 'node:assert';
-import { computeCleanupOrder, type OrderNode } from '../dist/order.js';
+import { computeCleanupOrder, type OrderNode } from '../src/order.js';
 
 function node(name: string, ownProblems: boolean, dependsOn: string[] = [], weakDependsOn: string[] = []): OrderNode {
     const dirs = function (list: string[]): string[] { return list.map(function (dep) { return `/r/${dep}`; }); };
-    return { dir: `/r/${name}`, name, mainProblem: ownProblems ? 'uncommitted' : null, dependsOn: dirs(dependsOn), weakDependsOn: dirs(weakDependsOn) };
+    return {
+        dir: `/r/${name}`,
+        name,
+        mainProblem: ownProblems ? 'uncommitted' : null,
+        reachesDependents: ownProblems,
+        dependsOn: dirs(dependsOn).map(function (dir) { return { dir, field: 'dependencies' as const }; }),
+        weakDependsOn: dirs(weakDependsOn),
+    };
 }
 
 describe('computeCleanupOrder', function () {
@@ -74,6 +81,22 @@ describe('computeCleanupOrder', function () {
             [0, 'best-globals', [], ['require-bro']],
             [1, 'qa-control', ['best-globals'], []],
             [2, 'require-bro', ['qa-control'], []],
+        ]);
+    });
+    it('solo entran por dependencia los que dependen de un repositorio cuyos problemas llegan a quien lo usa', function () {
+        const soloDev: OrderNode = { ...node('solo-dev', true), mainProblem: 'outdated-dev-dependencies', reachesDependents: false };
+        const steps = computeCleanupOrder([
+            soloDev,
+            node('base', true),
+            { ...node('usa-solo-dev', false), dependsOn: [{ dir: '/r/solo-dev', field: 'dependencies' }] },
+            { ...node('usa-base', false), dependsOn: [{ dir: '/r/base', field: 'optionalDependencies' }, { dir: '/r/solo-dev', field: 'dependencies' }] },
+            { ...node('usa-usa-base', false), dependsOn: [{ dir: '/r/usa-base', field: 'peerDependencies' }] },
+        ]);
+        assert.deepEqual(steps.map(function (step) { return [step.level, step.name, step.mainProblem, step.dependencyField]; }), [
+            [0, 'base', 'uncommitted', null],
+            [0, 'solo-dev', 'outdated-dev-dependencies', null],
+            [1, 'usa-base', null, 'optionalDependencies'],
+            [2, 'usa-usa-base', null, 'peerDependencies'],
         ]);
     });
 });

@@ -2,7 +2,7 @@
 // Es la librería (el core): no lee process.argv, no escribe en la salida y no termina el proceso.
 
 import { basename } from 'node:path';
-import { mainCategory } from './categories.js';
+import { fieldGravity, mainCategory, problemCategory, REACHES_DEPENDENTS } from './categories.js';
 import { checkCrossDependencies, checkGit, checkInstallation, checkPublication, type CheckResult, type LocalVersions } from './checks.js';
 import { computeCleanupOrder, type OrderNode } from './order.js';
 import { createNpmRegistry } from './registry.js';
@@ -12,7 +12,7 @@ import type { DependencyField, BussingOptions, BussingReport, CheckName, LogFunc
 
 export type * from './types.js';
 export { createNpmRegistry, DEFAULT_REGISTRY_URL } from './registry.js';
-export { DEPENDENCY_CATEGORY, mainCategory, PROBLEM_CATEGORIES, PROBLEM_CATEGORY, problemCategory } from './categories.js';
+export { DEPENDENCY_CATEGORY, mainCategory, PROBLEM_CATEGORIES, PROBLEM_CATEGORY, problemCategory, REACHES_DEPENDENTS } from './categories.js';
 
 /** Cantidad de repositorios que se revisan en paralelo. */
 const CONCURRENCY = 8;
@@ -110,14 +110,18 @@ export async function reviewEnvironment(options: BussingOptions): Promise<Bussin
         await runCheck(report, 'installation', function () { return checkInstallation(report.dir, localNames, registry); });
     });
 
-    function localDependencies(report: RepoReport, pkg: PackageJson | null, fields: readonly DependencyField[]): string[] {
-        const result = new Set<string>();
+    /** Repositorios revisados de los que depende en los campos indicados, con el campo más grave si figura en varios. */
+    function localDependencies(report: RepoReport, pkg: PackageJson | null, fields: readonly DependencyField[]): { dir: string; field: DependencyField }[] {
+        const result = new Map<string, DependencyField>();
         for (const dep of pkg === null ? [] : declaredDependencies(pkg, fields)) {
             const depDir = uniqueDirByName.get(dep.name);
-            if (depDir !== undefined && depDir !== report.dir) result.add(depDir);
+            if (depDir === undefined || depDir === report.dir) continue;
+            const previous = result.get(depDir);
+            if (previous === undefined || fieldGravity(dep.field) < fieldGravity(previous)) result.set(depDir, dep.field);
         }
-        return [...result];
+        return [...result].map(function ([dir, field]) { return { dir, field }; });
     }
+    const noWait = function (): boolean { return false; };
     const priority = new Map(Object.entries(options.dependencyPriority ?? {}));
     for (const name of priority.keys()) {
         if (!uniqueDirByName.has(name)) warnings.push({ check: 'order', message: `ningún repositorio revisado tiene el paquete ${name} (prioridad de dependencia)` });
@@ -126,14 +130,15 @@ export async function reviewEnvironment(options: BussingOptions): Promise<Bussin
         return {
             dir: report.dir,
             name: report.name ?? basename(report.dir),
-            mainProblem: mainCategory(report.problems, function () { return false; }),
+            mainProblem: mainCategory(report.problems, noWait),
+            reachesDependents: report.problems.some(function (problem) { return REACHES_DEPENDENTS[problemCategory(problem, noWait)]; }),
             dependsOn: localDependencies(report, pkg, ORDER_DEPENDENCY_FIELDS),
-            weakDependsOn: localDependencies(report, pkg, WEAK_ORDER_DEPENDENCY_FIELDS),
+            weakDependsOn: localDependencies(report, pkg, WEAK_ORDER_DEPENDENCY_FIELDS).map(function (dep) { return dep.dir; }),
         };
     });
     const cleanupOrder = computeCleanupOrder(nodes, priority);
-    // "espera dependencias" solo si alguna dependencia desactualizada con problemas propios queda antes en el orden
-    const hasProblems = new Set(repos.filter(function (repo) { return repo.report.problems.length > 0; }).map(function (repo) { return repo.report.name; }));
+    // "espera dependencias" solo si alguna dependencia desactualizada tiene problemas que llegan a quien la usa y queda antes en el orden
+    const hasProblems = new Set(nodes.filter(function (node) { return node.reachesDependents; }).map(function (node) { return node.name; }));
     const reportByDir = new Map(repos.map(function (repo) { return [repo.report.dir, repo.report] as const; }));
     for (const step of cleanupOrder) {
         step.mainProblem = mainCategory(mustGet(reportByDir, step.dir).problems, function (name) {

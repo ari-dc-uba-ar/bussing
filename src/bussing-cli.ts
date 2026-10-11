@@ -9,7 +9,7 @@ import type { ExitCode } from 'commendatore';
 import { guarantee, is, type Description, type GuaranteedType } from 'guarantee-type';
 import { load } from 'js-yaml';
 import { DEFAULT_REGISTRY_URL, createNpmRegistry, reviewEnvironment } from './bussing.js';
-import type { BussingOptions, ProblemCategory, BussingReport, CleanupStep, Problem, RepoReport, Warning } from './bussing.js';
+import type { BussingOptions, DependencyField, ProblemCategory, BussingReport, CleanupStep, Problem, RepoReport, Warning } from './bussing.js';
 
 export const EXIT_CODE = {
     clean: 0,
@@ -209,18 +209,26 @@ function describeRepo(repo: RepoReport): string[] {
     ];
 }
 
+/** Sufijo de cada campo de dependencias en las etiquetas ("dependencias-dev desactualizadas", "por dependencia-peer"). */
+const FIELD_SUFFIX: Record<DependencyField, string> = {
+    'dependencies': '',
+    'peerDependencies': '-peer',
+    'optionalDependencies': '-opt',
+    'devDependencies': '-dev',
+};
+
 export const CATEGORY_LABEL: Record<ProblemCategory, string> = {
     'uncommitted': 'falta commitear',
     'unpushed': 'falta pushear',
     'altered-node-modules': 'node_modules alterado',
-    'waiting-dependencies': 'espera dependencias',
-    'outdated-dependencies': 'dependencias desactualizadas',
-    'waiting-peer-dependencies': 'espera dependencias-peer',
-    'outdated-peer-dependencies': 'dependencias-peer desactualizadas',
-    'waiting-optional-dependencies': 'espera dependencias-opt',
-    'outdated-optional-dependencies': 'dependencias-opt desactualizadas',
-    'waiting-dev-dependencies': 'espera dependencias-dev',
-    'outdated-dev-dependencies': 'dependencias-dev desactualizadas',
+    'waiting-dependencies': `espera dependencias${FIELD_SUFFIX.dependencies}`,
+    'outdated-dependencies': `dependencias${FIELD_SUFFIX.dependencies} desactualizadas`,
+    'waiting-peer-dependencies': `espera dependencias${FIELD_SUFFIX.peerDependencies}`,
+    'outdated-peer-dependencies': `dependencias${FIELD_SUFFIX.peerDependencies} desactualizadas`,
+    'waiting-optional-dependencies': `espera dependencias${FIELD_SUFFIX.optionalDependencies}`,
+    'outdated-optional-dependencies': `dependencias${FIELD_SUFFIX.optionalDependencies} desactualizadas`,
+    'waiting-dev-dependencies': `espera dependencias${FIELD_SUFFIX.devDependencies}`,
+    'outdated-dev-dependencies': `dependencias${FIELD_SUFFIX.devDependencies} desactualizadas`,
     'version-not-bumped': 'falta subir versión',
     'unpublished': 'falta publicar',
 };
@@ -231,7 +239,8 @@ function describeStep(step: CleanupStep): string {
     if (step.inCycleWith.length > 0) details.push('ciclo con ' + step.inCycleWith.join(', '));
     if (step.deferred.length > 0) details.push(`ciclo: ${step.deferred.join(', ')} ${step.deferred.length === 1 ? 'se actualiza' : 'se actualizan'} después`);
     const folder = basename(step.dir);
-    const label = step.mainProblem === null ? 'por dependencia' : CATEGORY_LABEL[step.mainProblem];
+    const label = step.mainProblem !== null ? CATEGORY_LABEL[step.mainProblem]
+        : `por dependencia${step.dependencyField === null ? '' : FIELD_SUFFIX[step.dependencyField]}`;
     return `  ${step.level + 1}. ${step.name}${folder === step.name ? '' : ` [${folder}]`}  ${label}` + (details.length > 0 ? `  (${details.join('; ')})` : '');
 }
 

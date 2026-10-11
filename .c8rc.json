@@ -1,6 +1,6 @@
 {
   "all": true,
-  "include": ["dist/**/*.js"],
-  "exclude": ["dist/types.js", "**/*.d.ts"],
+  "include": ["test-run/src/**/*.js"],
+  "exclude": ["test-run/src/types.js", "**/*.d.ts"],
   "reporter": ["text", "lcov"]
 }

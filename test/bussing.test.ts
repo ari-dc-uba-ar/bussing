@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { reviewEnvironment } from '../dist/bussing.js';
+import { reviewEnvironment } from '../src/bussing.js';
 import { fakeRegistry, gitRepo, packageJson, packument, tempDir, writeFiles } from './helpers.js';
 
 describe('bussing', function () {
@@ -54,12 +54,22 @@ describe('bussing', function () {
         assert.deepEqual(report.warnings, [{ check: 'order', message: 'ningún repositorio revisado tiene el paquete otro (prioridad de dependencia)' }]);
     });
 
-    it('"espera dependencias" solo si la dependencia queda antes en el orden', async function () {
+    it('"espera dependencias" solo si la dependencia tiene problemas que llegan a quien la usa y queda antes en el orden', async function () {
         const root = await tempDir();
         await writeFiles(join(root, 'a'), { 'package.json': packageJson({ name: 'a', version: '1.0.0', private: true, devDependencies: { b: '^0.1.0' } }) });
         await writeFiles(join(root, 'b'), { 'package.json': packageJson({ name: 'b', version: '0.2.0', private: true, devDependencies: { a: '^0.9.0' } }) });
-        const report = await reviewEnvironment({ roots: [root], registry: fakeRegistry({}) });
-        assert.deepEqual(report.cleanupOrder.map(function (step) { return [step.level, step.name, step.mainProblem, step.dependsOn, step.deferred]; }), [
+        const order = async function (): Promise<(string | number | string[] | null)[][]> {
+            const report = await reviewEnvironment({ roots: [root], registry: fakeRegistry({}) });
+            return report.cleanupOrder.map(function (step) { return [step.level, step.name, step.mainProblem, step.dependsOn, step.deferred]; });
+        };
+        // los problemas de b son solo de devDependencies: no hay que esperarlo
+        assert.deepEqual(await order(), [
+            [0, 'b', 'outdated-dev-dependencies', [], ['a']],
+            [1, 'a', 'outdated-dev-dependencies', ['b'], []],
+        ]);
+        // b no está publicado: hay que esperarlo
+        await writeFiles(join(root, 'b'), { 'package.json': packageJson({ name: 'b', version: '0.2.0', devDependencies: { a: '^0.9.0' } }) });
+        assert.deepEqual(await order(), [
             [0, 'b', 'outdated-dev-dependencies', [], ['a']],
             [1, 'a', 'waiting-dev-dependencies', ['b'], []],
         ]);

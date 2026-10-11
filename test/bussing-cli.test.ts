@@ -1,8 +1,8 @@
 import { strict as assert } from 'node:assert';
 import { join } from 'node:path';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { describeProblem, EXIT_CODE, formatReport, main, parseArgs, parsePriority, readDefaults } from '../dist/bussing-cli.js';
-import type { BussingReport, Problem } from '../dist/types.js';
+import { describeProblem, EXIT_CODE, formatReport, main, parseArgs, parsePriority, readDefaults } from '../src/bussing-cli.js';
+import type { BussingReport, Problem } from '../src/types.js';
 import { gitRepo, packageJson, tempDir } from './helpers.js';
 
 describe('bussing-cli', function () {
@@ -97,8 +97,8 @@ describe('bussing-cli', function () {
             ],
             ignored: ['/r/viejo'],
             cleanupOrder: [
-                { name: 'a', dir: '/r/a', level: 0, mainProblem: 'unpushed', dependsOn: [], inCycleWith: [], deferred: ['q'] },
-                { name: 'x', dir: '/r/x2', level: 1, mainProblem: null, dependsOn: ['a'], inCycleWith: ['y'], deferred: ['p', 'q'] },
+                { name: 'a', dir: '/r/a', level: 0, mainProblem: 'unpushed', dependencyField: null, dependsOn: [], inCycleWith: [], deferred: ['q'] },
+                { name: 'x', dir: '/r/x2', level: 1, mainProblem: null, dependencyField: 'peerDependencies', dependsOn: ['a'], inCycleWith: ['y'], deferred: ['p', 'q'] },
             ],
             warnings: [{ check: 'cross-dependencies', message: 'global' }],
         };
@@ -113,7 +113,7 @@ describe('bussing-cli', function () {
             '',
             'Orden de limpieza (los del mismo número no dependen entre sí):',
             '  1. a  falta pushear  (ciclo: q se actualiza después)',
-            '  2. x [x2]  por dependencia  (depende de a; ciclo con y; ciclo: p, q se actualizan después)',
+            '  2. x [x2]  por dependencia-peer  (depende de a; ciclo con y; ciclo: p, q se actualizan después)',
             '',
             'advertencia (cross-dependencies): global',
             '',
