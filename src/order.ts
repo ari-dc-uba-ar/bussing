@@ -1,4 +1,6 @@
 // Orden de limpieza: repositorios con problemas y los que dependen de ellos, en orden topológico.
+// Las dependencias fuertes (dependencies, optionalDependencies, peerDependencies) definen quién entra en la lista y se
+// respetan siempre; las débiles (devDependencies) solo ordenan, y se descartan si cierran un ciclo.
 
 import type { CleanupStep, ProblemCategory } from './types.js';
 import { defined, mustGet } from './util.js';
@@ -9,8 +11,10 @@ export interface OrderNode {
     name: string;
     /** Categoría del problema propio más grave; `null` si no tiene problemas propios. */
     mainProblem: ProblemCategory | null;
-    /** Carpetas de los repositorios revisados de los que depende. */
+    /** Carpetas de los repositorios revisados de los que depende (dependencias fuertes: siempre se respetan en el orden). */
     dependsOn: string[];
+    /** Carpetas de los repositorios revisados de los que depende como devDependency (débiles: se respetan salvo que cierren un ciclo). */
+    weakDependsOn: string[];
 }
 
 function byName(a: { name: string; dir: string }, b: { name: string; dir: string }): number {
@@ -54,13 +58,28 @@ function stronglyConnectedComponents(dirs: string[], edges: Map<string, string[]
     return component;
 }
 
-export function computeCleanupOrder(nodes: OrderNode[]): CleanupStep[] {
+/** `true` si desde `from` se llega a `to` siguiendo las aristas. */
+function reaches(edges: Map<number, Set<number>>, from: number, to: number): boolean {
+    const visited = new Set<number>();
+    const pending = [from];
+    while (pending.length > 0) {
+        const current = defined(pending.pop(), 'pendiente');
+        if (current === to) return true;
+        if (visited.has(current)) continue;
+        visited.add(current);
+        pending.push(...(edges.get(current) ?? []));
+    }
+    return false;
+}
+
+/** `priority`: prioridad de cada paquete como dependencia débil (por omisión 0); ver `BussingOptions.dependencyPriority`. */
+export function computeCleanupOrder(nodes: OrderNode[], priority: ReadonlyMap<string, number> = new Map()): CleanupStep[] {
     const byDir = new Map(nodes.map(function (node) { return [node.dir, node] as const; }));
     const dependents = new Map<string, string[]>();
     for (const node of nodes) {
         for (const dep of node.dependsOn) dependents.set(dep, [...(dependents.get(dep) ?? []), node.dir]);
     }
-    // Los repositorios con problemas propios y, transitivamente, los que dependen de ellos
+    // Los repositorios con problemas propios y, transitivamente por las dependencias fuertes, los que dependen de ellos
     const included = new Set<string>();
     const pending = nodes.filter(function (node) { return node.mainProblem !== null; }).map(function (node) { return node.dir; });
     while (pending.length > 0) {
@@ -70,23 +89,52 @@ export function computeCleanupOrder(nodes: OrderNode[]): CleanupStep[] {
         pending.push(...(dependents.get(dir) ?? []));
     }
     const dirs = [...included].sort();
-    const edges = new Map(dirs.map(function (dir) {
+    const strongEdges = new Map(dirs.map(function (dir) {
         return [dir, mustGet(byDir, dir).dependsOn.filter(function (dep) { return included.has(dep); })] as const;
     }));
-    const component = stronglyConnectedComponents(dirs, edges);
+    // Los ciclos de dependencias fuertes forman un solo paso
+    const component = stronglyConnectedComponents(dirs, strongEdges);
+    const componentEdges = new Map<number, Set<number>>();
+    function addComponentEdge(from: number, to: number): void {
+        const set = componentEdges.get(from) ?? new Set<number>();
+        set.add(to);
+        componentEdges.set(from, set);
+    }
+    for (const dir of dirs) {
+        for (const dep of mustGet(strongEdges, dir)) {
+            if (mustGet(component, dep) !== mustGet(component, dir)) addComponentEdge(mustGet(component, dir), mustGet(component, dep));
+        }
+    }
+    // Las dependencias débiles se respetan salvo que cierren un ciclo. Se agregan primero las de mayor prioridad (según la
+    // dependencia) y, a igual prioridad, por nombre, para que el resultado sea reproducible. Las que cerrarían un ciclo se postergan.
+    const acceptedWeak = new Map<string, string[]>(dirs.map(function (dir) { return [dir, []] as const; }));
+    const deferredWeak = new Map<string, string[]>(dirs.map(function (dir) { return [dir, []] as const; }));
+    const priorityOf = function (dir: string): number { return priority.get(mustGet(byDir, dir).name) ?? 0; };
+    const weakEdges: [string, string][] = [];
+    for (const dir of dirs) {
+        for (const dep of mustGet(byDir, dir).weakDependsOn) if (included.has(dep)) weakEdges.push([dir, dep]);
+    }
+    weakEdges.sort(function ([dirA, depA], [dirB, depB]) {
+        return priorityOf(depB) - priorityOf(depA) || byName(mustGet(byDir, dirA), mustGet(byDir, dirB)) || byName(mustGet(byDir, depA), mustGet(byDir, depB));
+    });
+    for (const [dir, dep] of weakEdges) {
+        const from = mustGet(component, dir);
+        const to = mustGet(component, dep);
+        if (from === to) continue;
+        if (reaches(componentEdges, to, from)) {
+            mustGet(deferredWeak, dir).push(dep);
+        } else {
+            addComponentEdge(from, to);
+            mustGet(acceptedWeak, dir).push(dep);
+        }
+    }
     // Nivel de cada componente: 0 si no depende de otra componente; si no, uno más que la de mayor nivel de la que depende
     const levels = new Map<number, number>();
     function levelOf(id: number): number {
         const known = levels.get(id);
         if (known !== undefined) return known;
         let level = 0;
-        for (const dir of dirs) {
-            if (component.get(dir) !== id) continue;
-            for (const dep of mustGet(edges, dir)) {
-                const depComponent = mustGet(component, dep);
-                if (depComponent !== id) level = Math.max(level, levelOf(depComponent) + 1);
-            }
-        }
+        for (const dep of componentEdges.get(id) ?? []) level = Math.max(level, levelOf(dep) + 1);
         levels.set(id, level);
         return level;
     }
@@ -94,13 +142,15 @@ export function computeCleanupOrder(nodes: OrderNode[]): CleanupStep[] {
         const node = mustGet(byDir, dir);
         const id = mustGet(component, dir);
         const names = function (list: string[]): string[] { return list.map(function (d) { return mustGet(byDir, d).name; }).sort(); };
+        const deps = [...mustGet(strongEdges, dir).filter(function (dep) { return mustGet(component, dep) !== id; }), ...mustGet(acceptedWeak, dir)];
         return {
             name: node.name,
             dir,
             level: levelOf(id),
             mainProblem: node.mainProblem,
-            dependsOn: names(mustGet(edges, dir).filter(function (dep) { return component.get(dep) !== id; })),
-            inCycleWith: names(dirs.filter(function (other) { return other !== dir && component.get(other) === id; })),
+            dependsOn: names([...new Set(deps)]),
+            deferred: names(mustGet(deferredWeak, dir)),
+            inCycleWith: names(dirs.filter(function (other) { return other !== dir && mustGet(component, other) === id; })),
         };
     });
     return steps.sort(function (a, b) { return a.level - b.level || byName(a, b); });

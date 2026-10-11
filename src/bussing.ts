@@ -2,17 +2,17 @@
 // Es la librería (el core): no lee process.argv, no escribe en la salida y no termina el proceso.
 
 import { basename } from 'node:path';
-import { mainProblem } from './categories.js';
+import { mainCategory } from './categories.js';
 import { checkCrossDependencies, checkGit, checkInstallation, checkPublication, type CheckResult, type LocalVersions } from './checks.js';
 import { computeCleanupOrder, type OrderNode } from './order.js';
 import { createNpmRegistry } from './registry.js';
-import { declaredDependencies, findRepos, ORDER_DEPENDENCY_FIELDS, readPackageJson, type PackageJson } from './repos.js';
-import { defined } from './util.js';
-import type { BussingOptions, BussingReport, CheckName, LogFunction, RepoReport, Warning } from './types.js';
+import { declaredDependencies, findRepos, ORDER_DEPENDENCY_FIELDS, readPackageJson, WEAK_ORDER_DEPENDENCY_FIELDS, type PackageJson } from './repos.js';
+import { defined, mustGet } from './util.js';
+import type { DependencyField, BussingOptions, BussingReport, CheckName, LogFunction, RepoReport, Warning } from './types.js';
 
 export type * from './types.js';
 export { createNpmRegistry, DEFAULT_REGISTRY_URL } from './registry.js';
-export { mainProblem, PROBLEM_CATEGORIES, PROBLEM_CATEGORY } from './categories.js';
+export { mainCategory, PROBLEM_CATEGORIES, PROBLEM_CATEGORY } from './categories.js';
 
 /** Cantidad de repositorios que se revisan en paralelo. */
 const CONCURRENCY = 8;
@@ -110,13 +110,35 @@ export async function reviewEnvironment(options: BussingOptions): Promise<Bussin
         await runCheck(report, 'installation', function () { return checkInstallation(report.dir, localNames, registry); });
     });
 
-    const nodes: OrderNode[] = repos.map(function ({ report, pkg }): OrderNode {
-        const dependsOn = new Set<string>();
-        for (const dep of pkg === null ? [] : declaredDependencies(pkg, ORDER_DEPENDENCY_FIELDS)) {
+    function localDependencies(report: RepoReport, pkg: PackageJson | null, fields: readonly DependencyField[]): string[] {
+        const result = new Set<string>();
+        for (const dep of pkg === null ? [] : declaredDependencies(pkg, fields)) {
             const depDir = uniqueDirByName.get(dep.name);
-            if (depDir !== undefined && depDir !== report.dir) dependsOn.add(depDir);
+            if (depDir !== undefined && depDir !== report.dir) result.add(depDir);
         }
-        return { dir: report.dir, name: report.name ?? basename(report.dir), mainProblem: mainProblem(report.problems), dependsOn: [...dependsOn] };
+        return [...result];
+    }
+    const priority = new Map(Object.entries(options.dependencyPriority ?? {}));
+    for (const name of priority.keys()) {
+        if (!uniqueDirByName.has(name)) warnings.push({ check: 'order', message: `ningún repositorio revisado tiene el paquete ${name} (prioridad de dependencia)` });
+    }
+    const nodes: OrderNode[] = repos.map(function ({ report, pkg }): OrderNode {
+        return {
+            dir: report.dir,
+            name: report.name ?? basename(report.dir),
+            mainProblem: mainCategory(report.problems, function () { return false; }),
+            dependsOn: localDependencies(report, pkg, ORDER_DEPENDENCY_FIELDS),
+            weakDependsOn: localDependencies(report, pkg, WEAK_ORDER_DEPENDENCY_FIELDS),
+        };
     });
-    return { repos: repos.map(function (repo) { return repo.report; }), ignored, cleanupOrder: computeCleanupOrder(nodes), warnings };
+    const cleanupOrder = computeCleanupOrder(nodes, priority);
+    // "espera dependencias" solo si alguna dependencia desactualizada con problemas propios queda antes en el orden
+    const hasProblems = new Set(repos.filter(function (repo) { return repo.report.problems.length > 0; }).map(function (repo) { return repo.report.name; }));
+    const reportByDir = new Map(repos.map(function (repo) { return [repo.report.dir, repo.report] as const; }));
+    for (const step of cleanupOrder) {
+        step.mainProblem = mainCategory(mustGet(reportByDir, step.dir).problems, function (name) {
+            return hasProblems.has(name) && step.dependsOn.includes(name);
+        });
+    }
+    return { repos: repos.map(function (repo) { return repo.report; }), ignored, cleanupOrder, warnings };
 }

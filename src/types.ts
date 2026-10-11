@@ -31,6 +31,11 @@ export interface BussingOptions {
     roots: string[];
     /** Nombres de subcarpetas que no se revisan. */
     ignore?: string[];
+    /**
+     * Prioridad de cada paquete como dependencia débil (devDependency) al romper ciclos; por omisión 0.
+     * Las dependencias de mayor prioridad se respetan antes en el orden; las de menor prioridad son las primeras en postergarse.
+     */
+    dependencyPriority?: Record<string, number>;
     /** Por omisión, el registro público de npm. */
     registry?: Registry;
     log?: LogFunction;
@@ -67,7 +72,15 @@ export type Problem =
 export type ProblemKind = Problem['kind'];
 
 /** Categorías de problemas, de la más grave a la menos grave (ver `PROBLEM_CATEGORIES` y `PROBLEM_CATEGORY`). */
-export type ProblemCategory = 'uncommitted' | 'unpushed' | 'altered-node-modules' | 'outdated-dependencies' | 'version-not-bumped' | 'unpublished';
+export type ProblemCategory =
+    | 'uncommitted'
+    | 'unpushed'
+    | 'altered-node-modules'
+    /** Tiene dependencias desactualizadas y alguna de ellas tiene a su vez problemas propios. */
+    | 'waiting-dependencies'
+    | 'outdated-dependencies'
+    | 'version-not-bumped'
+    | 'unpublished';
 
 export type CheckName = 'repo' | 'git' | 'publication' | 'cross-dependencies' | 'installation' | 'order';
 
@@ -96,8 +109,10 @@ export interface CleanupStep {
     mainProblem: ProblemCategory | null;
     /** Repositorios de la lista de limpieza de los que depende. */
     dependsOn: string[];
-    /** Repositorios con los que forma un ciclo de dependencias (vacío si no hay ciclo). */
+    /** Repositorios con los que forma un ciclo de dependencias fuertes (vacío si no hay ciclo). */
     inCycleWith: string[];
+    /** Dependencias débiles que no se respetan en el orden porque cerrarían un ciclo: se actualizan después. */
+    deferred: string[];
 }
 
 export interface BussingReport {

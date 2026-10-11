@@ -10,11 +10,13 @@ export const PROBLEM_CATEGORIES: readonly ProblemCategory[] = [
     'uncommitted',
     'unpushed',
     'altered-node-modules',
+    'waiting-dependencies',
     'outdated-dependencies',
     'version-not-bumped',
     'unpublished',
 ];
 
+/** Categoría de cada tipo de problema. `waiting-dependencies` no corresponde a un tipo: la determina `mainCategory`. */
 export const PROBLEM_CATEGORY: Record<ProblemKind, ProblemCategory> = {
     'uncommitted': 'uncommitted',
     'unpushed': 'unpushed',
@@ -27,10 +29,21 @@ export const PROBLEM_CATEGORY: Record<ProblemKind, ProblemCategory> = {
     'not-published': 'unpublished',
 };
 
-/** Categoría más grave entre los problemas; `null` si no hay problemas. */
-export function mainProblem(problems: Problem[]): ProblemCategory | null {
+/**
+ * Categoría más grave entre los problemas; `null` si no hay problemas.
+ * Si la más grave es `outdated-dependencies` y hay que esperar a alguna de esas dependencias (`mustWait`),
+ * la categoría es `waiting-dependencies`.
+ */
+export function mainCategory(problems: Problem[], mustWait: (name: string) => boolean): ProblemCategory | null {
     for (const category of PROBLEM_CATEGORIES) {
-        if (problems.some(function (problem) { return PROBLEM_CATEGORY[problem.kind] === category; })) return category;
+        if (problems.some(function (problem) { return PROBLEM_CATEGORY[problem.kind] === category; })) {
+            if (category === 'outdated-dependencies' && problems.some(function (problem) {
+                return problem.kind === 'outdated-dependency' && mustWait(problem.dependency);
+            })) {
+                return 'waiting-dependencies';
+            }
+            return category;
+        }
     }
     return null;
 }

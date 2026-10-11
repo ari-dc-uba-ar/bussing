@@ -8,10 +8,15 @@ import type { DependencyField } from './types.js';
 export const DEPENDENCY_FIELDS: readonly DependencyField[] = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'];
 
 /**
- * Campos que se usan para el orden de limpieza. Las devDependencies no se usan: entre los paquetes propios forman
- * ciclos (por ejemplo, qa-control es devDependency de las librerías de las que él mismo depende).
+ * Dependencias fuertes para el orden de limpieza: definen qué repositorios entran en la lista y se respetan siempre.
  */
 export const ORDER_DEPENDENCY_FIELDS: readonly DependencyField[] = ['dependencies', 'optionalDependencies', 'peerDependencies'];
+
+/**
+ * Dependencias débiles para el orden de limpieza: se respetan salvo que cierren un ciclo. Entre los paquetes propios las
+ * devDependencies forman ciclos (por ejemplo, qa-control es devDependency de librerías de las que él mismo depende).
+ */
+export const WEAK_ORDER_DEPENDENCY_FIELDS: readonly DependencyField[] = ['devDependencies'];
 
 const packageJsonDescription = is.object({
     name: is.optional.string,

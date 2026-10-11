@@ -39,6 +39,9 @@ path:
   - /path/to/other-repos
 ignore:
   - old-repo
+priority:
+  qa-control: 1
+  require-bro: -1
 ```
 
 ## Controles
@@ -76,7 +79,9 @@ Para cada dependencia en `node_modules`:
 
 Con los repositorios desprolijos y los que dependen de ellos (aunque estén limpios) se arma un orden topológico: primero los que no dependen de ningún otro repositorio de la lista. Para cada repositorio se indica por qué está en la lista (sus propios problemas, o qué dependencia lo obliga a actualizarse).
 
-Para el orden se usan `dependencies`, `optionalDependencies` y `peerDependencies`, no las `devDependencies`: entre los paquetes propios forman ciclos (por ejemplo, qa-control es devDependency de librerías de las que él mismo depende). Si aun así hay un ciclo, sus integrantes quedan en el mismo paso y se indica con quiénes forman el ciclo.
+Las `dependencies`, `optionalDependencies` y `peerDependencies` son dependencias fuertes: definen qué repositorios entran en la lista y siempre se respetan en el orden. Las `devDependencies` son débiles: se respetan salvo que cierren un ciclo, porque entre los paquetes propios forman ciclos (por ejemplo, qa-control es devDependency de librerías de las que él mismo depende). Las que cerrarían un ciclo se postergan: el paso lo indica (`ciclo: qa-control se actualiza después`) y esa dependencia queda desactualizada hasta una revisión posterior. Con `--priority paquete=número` (se puede repetir; por omisión 0) se decide qué dependencias débiles se respetan primero: las de mayor número se respetan antes y las de menor número son las primeras en postergarse. Si hay un ciclo de dependencias fuertes, sus integrantes quedan en el mismo paso y se indica con quiénes forman el ciclo.
+
+Cada paso muestra el problema más grave del repositorio. De más grave a menos grave: falta commitear, falta pushear, node_modules alterado, espera dependencias (tiene dependencias desactualizadas y alguna, con problemas propios, va antes en el orden), dependencias desactualizadas, falta subir versión, falta publicar. Los que entran solo por sus dependencias se marcan "por dependencia".
 
 ## Uso
 
@@ -115,6 +120,9 @@ path:
   - /path/to/other-repos
 ignore:
   - old-repo
+priority:
+  qa-control: 1
+  require-bro: -1
 ```
 
 ## Checks
@@ -152,7 +160,9 @@ For each dependency in `node_modules`:
 
 With the untidy repositories and those that depend on them (even if they are clean) a topological order is built: first the ones that do not depend on any other repository of the list. For each repository the reason it is on the list is shown (its own problems, or which dependency forces it to be updated).
 
-The order uses `dependencies`, `optionalDependencies` and `peerDependencies`, not `devDependencies`: among one's own packages they form cycles (for example, qa-control is a devDependency of libraries it depends on). If there is still a cycle, its members are placed in the same step and the cycle is shown.
+`dependencies`, `optionalDependencies` and `peerDependencies` are strong dependencies: they define which repositories enter the list and are always respected in the order. `devDependencies` are weak: they are respected unless they close a cycle, because among one's own packages they form cycles (for example, qa-control is a devDependency of libraries it depends on). Those that would close a cycle are deferred: the step shows it and that dependency stays outdated until a later review. With `--priority package=number` (it can be repeated; 0 by default) you decide which weak dependencies are respected first: higher numbers are respected earlier and lower numbers are the first to be deferred. If there is a cycle of strong dependencies, its members are placed in the same step and the cycle is shown.
+
+Each step shows the most serious problem of the repository. From most to least serious: uncommitted changes, unpushed commits, altered node_modules, waiting for dependencies (it has outdated dependencies and some of them, with their own problems, come earlier in the order), outdated dependencies, version not bumped, not published. Those that enter only because of their dependencies are marked as such.
 
 ## Usage
 

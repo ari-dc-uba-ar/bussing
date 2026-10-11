@@ -47,6 +47,24 @@ describe('bussing', function () {
         assert.deepEqual(report.warnings, [{ check: 'repo', message: 'ninguna carpeta de repositorio se llama no-esta (ignore)' }]);
     });
 
+    it('advierte las prioridades de paquetes que no están entre los revisados', async function () {
+        const root = await tempDir();
+        await gitRepo(join(root, 'x'), { 'package.json': packageJson({ name: 'x', version: '1.0.0', private: true }) });
+        const report = await reviewEnvironment({ roots: [root], dependencyPriority: { x: 1, otro: -1 }, registry: fakeRegistry({}) });
+        assert.deepEqual(report.warnings, [{ check: 'order', message: 'ningún repositorio revisado tiene el paquete otro (prioridad de dependencia)' }]);
+    });
+
+    it('"espera dependencias" solo si la dependencia queda antes en el orden', async function () {
+        const root = await tempDir();
+        await writeFiles(join(root, 'a'), { 'package.json': packageJson({ name: 'a', version: '1.0.0', private: true, devDependencies: { b: '^0.1.0' } }) });
+        await writeFiles(join(root, 'b'), { 'package.json': packageJson({ name: 'b', version: '0.2.0', private: true, devDependencies: { a: '^0.9.0' } }) });
+        const report = await reviewEnvironment({ roots: [root], registry: fakeRegistry({}) });
+        assert.deepEqual(report.cleanupOrder.map(function (step) { return [step.level, step.name, step.mainProblem, step.dependsOn, step.deferred]; }), [
+            [0, 'b', 'outdated-dependencies', [], ['a']],
+            [1, 'a', 'waiting-dependencies', ['b'], []],
+        ]);
+    });
+
     it('un control que falla se informa como advertencia', async function () {
         const root = await tempDir();
         await gitRepo(join(root, 'x'), { 'package.json': packageJson({ name: 'x', version: '1.0.0' }) });

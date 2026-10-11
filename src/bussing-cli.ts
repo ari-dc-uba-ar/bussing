@@ -26,6 +26,15 @@ export function defaultsPath(): string {
     return join(homedir(), DEFAULTS_FILE_NAME);
 }
 
+/** Interpreta `paquete=número` (el número puede ser negativo). */
+export function parsePriority(value: string): [string, number] {
+    const match = /^(.+)=(-?\d+)$/.exec(value);
+    if (match === null || match[1] === undefined || match[2] === undefined) {
+        throw new Error(`--priority ${value} no tiene la forma paquete=número`);
+    }
+    return [match[1], Number(match[2])];
+}
+
 /** Parámetros de la línea de comandos. Las mismas claves se pueden usar en el archivo de valores por omisión. */
 const flags = {
     path: {
@@ -36,6 +45,11 @@ const flags = {
     ignore: {
         type: [String],
         description: 'Nombre de una subcarpeta que no se revisa; se puede repetir',
+    },
+    priority: {
+        type: [parsePriority],
+        description: 'Prioridad de un paquete como devDependency al romper ciclos del orden de limpieza, como paquete=número ' +
+            '(por omisión 0; las de mayor número se respetan primero); se puede repetir',
     },
     registry: {
         type: String,
@@ -54,6 +68,8 @@ const defaultsFields = {
     // una carpeta sola o una lista
     path: { optional: is.union([is.string, is.array.string]) },
     ignore: { optional: is.union([is.string, is.array.string]) },
+    // en el archivo es un mapa paquete: número
+    priority: is.optional.recordString.number,
     registry: is.optional.string,
     json: is.optional.boolean,
 } satisfies Record<FlagName, Description>;
@@ -68,6 +84,7 @@ export type Defaults = Omit<DefaultsFile, 'path' | 'ignore'> & { path?: string[]
 export interface CliOptions {
     roots: string[];
     ignore: string[];
+    priority: Record<string, number>;
     registry: string;
     json: boolean;
 }
@@ -128,7 +145,7 @@ export function parseArgs(argv: string[], defaults: Defaults): CliOptions {
             description: 'Revisa los repositorios locales y muestra los que quedaron desprolijos y el orden en que conviene limpiarlos.\n' +
                 `Los valores por omisión de los parámetros se pueden definir en ${DEFAULTS_FILE_LABEL} (las claves son los nombres de los parámetros).\n` +
                 `Códigos de salida: ${EXIT_CODE.clean} sin problemas, ${EXIT_CODE.error} error, ${EXIT_CODE.problems} hay problemas.`,
-            examples: ['bussing --path ../repos --path ../otros-repos --ignore repo-viejo', 'bussing --json'],
+            examples: ['bussing --path ../repos --path ../otros-repos --ignore repo-viejo', 'bussing --priority qa-control=1 --priority require-bro=-1', 'bussing --json'],
         },
     }, undefined, argv);
     // las carpetas relativas son relativas a la carpeta actual, vengan de la línea de comandos o del archivo
@@ -139,6 +156,7 @@ export function parseArgs(argv: string[], defaults: Defaults): CliOptions {
     return {
         roots,
         ignore: parsed.flags.ignore.length > 0 ? parsed.flags.ignore : defaults.ignore ?? [],
+        priority: parsed.flags.priority.length > 0 ? Object.fromEntries(parsed.flags.priority) : defaults.priority ?? {},
         registry: parsed.flags.registry ?? defaults.registry ?? DEFAULT_REGISTRY_URL,
         json: parsed.flags.json ?? defaults.json ?? false,
     };
@@ -196,6 +214,7 @@ export const CATEGORY_LABEL: Record<ProblemCategory, string> = {
     'uncommitted': 'falta commitear',
     'unpushed': 'falta pushear',
     'altered-node-modules': 'node_modules alterado',
+    'waiting-dependencies': 'espera dependencias',
     'outdated-dependencies': 'dependencias desactualizadas',
     'version-not-bumped': 'falta subir versión',
     'unpublished': 'falta publicar',
@@ -205,6 +224,7 @@ function describeStep(step: CleanupStep): string {
     const details: string[] = [];
     if (step.dependsOn.length > 0) details.push('depende de ' + step.dependsOn.join(', '));
     if (step.inCycleWith.length > 0) details.push('ciclo con ' + step.inCycleWith.join(', '));
+    if (step.deferred.length > 0) details.push(`ciclo: ${step.deferred.join(', ')} ${step.deferred.length === 1 ? 'se actualiza' : 'se actualizan'} después`);
     const folder = basename(step.dir);
     const label = step.mainProblem === null ? 'por dependencia' : CATEGORY_LABEL[step.mainProblem];
     return `  ${step.level + 1}. ${step.name}${folder === step.name ? '' : ` [${folder}]`}  ${label}` + (details.length > 0 ? `  (${details.join('; ')})` : '');
@@ -229,6 +249,7 @@ export async function main(argv: string[]): Promise<number> {
         const reviewOptions: BussingOptions = {
             roots: options.roots,
             ignore: options.ignore,
+            dependencyPriority: options.priority,
             registry: createNpmRegistry(options.registry),
             log: function (message) { if (process.stderr.isTTY) process.stderr.write(`\r\u001b[K${message}`); },
         };

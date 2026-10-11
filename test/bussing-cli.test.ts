@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { join } from 'node:path';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { describeProblem, EXIT_CODE, formatReport, main, parseArgs, readDefaults } from '../src/bussing-cli.js';
+import { describeProblem, EXIT_CODE, formatReport, main, parseArgs, parsePriority, readDefaults } from '../src/bussing-cli.js';
 import type { BussingReport, Problem } from '../src/types.js';
 import { gitRepo, packageJson, tempDir } from './helpers.js';
 
@@ -16,8 +16,10 @@ describe('bussing-cli', function () {
         it('lee una lista de carpetas o una sola', async function () {
             const dir = await tempDir();
             const file = join(dir, 'd.yaml');
-            await writeFile(file, 'path:\n  - repos\n  - /absoluta\nignore: [viejo, otro]\nregistry: https://r.example/\njson: true\n');
-            assert.deepEqual(readDefaults(file, 'x'), { path: ['repos', '/absoluta'], ignore: ['viejo', 'otro'], registry: 'https://r.example/', json: true });
+            await writeFile(file, 'path:\n  - repos\n  - /absoluta\nignore: [viejo, otro]\npriority:\n  qa-control: 1\n  require-bro: -1\nregistry: https://r.example/\njson: true\n');
+            assert.deepEqual(readDefaults(file, 'x'), {
+                path: ['repos', '/absoluta'], ignore: ['viejo', 'otro'], priority: { 'qa-control': 1, 'require-bro': -1 }, registry: 'https://r.example/', json: true,
+            });
             await writeFile(file, 'path: repos\nignore: viejo\n');
             assert.deepEqual(readDefaults(file, 'x'), { path: ['repos'], ignore: ['viejo'] });
         });
@@ -25,7 +27,7 @@ describe('bussing-cli', function () {
             const dir = await tempDir();
             const file = join(dir, 'd.yaml');
             await writeFile(file, 'paths: [a]\n');
-            assert.throws(function () { readDefaults(file, '~/x.yaml'); }, /^Error: ~\/x\.yaml tiene claves desconocidas: paths \(las claves válidas son: path, ignore, registry, json\)$/);
+            assert.throws(function () { readDefaults(file, '~/x.yaml'); }, /^Error: ~\/x\.yaml tiene claves desconocidas: paths \(las claves válidas son: path, ignore, priority, registry, json\)$/);
             await writeFile(file, 'path: [a\n');
             assert.throws(function () { readDefaults(file, '~/x.yaml'); }, /^Error: ~\/x\.yaml no es un YAML válido/);
             await writeFile(file, '- a\n');
@@ -37,16 +39,22 @@ describe('bussing-cli', function () {
 
     describe('parseArgs', function () {
         it('los parámetros tienen prioridad sobre los valores por omisión', function () {
-            const defaults = { path: ['/d1', '/d2'], ignore: ['v'], registry: 'https://d.example/', json: true };
-            assert.deepEqual(parseArgs([], defaults), { roots: ['/d1', '/d2'], ignore: ['v'], registry: 'https://d.example/', json: true });
-            assert.deepEqual(parseArgs(['--path', '/a', '-p', '/b', '--ignore', 'x', '--ignore', 'y', '--registry', 'https://a.example/'], defaults), {
-                roots: ['/a', '/b'], ignore: ['x', 'y'], registry: 'https://a.example/', json: true,
+            const defaults = { path: ['/d1', '/d2'], ignore: ['v'], priority: { d: 1 }, registry: 'https://d.example/', json: true };
+            assert.deepEqual(parseArgs([], defaults), { roots: ['/d1', '/d2'], ignore: ['v'], priority: { d: 1 }, registry: 'https://d.example/', json: true });
+            assert.deepEqual(parseArgs(['--path', '/a', '-p', '/b', '--ignore', 'x', '--ignore', 'y', '--priority', 'q=2', '--priority', 'r=-1', '--registry', 'https://a.example/'], defaults), {
+                roots: ['/a', '/b'], ignore: ['x', 'y'], priority: { q: 2, r: -1 }, registry: 'https://a.example/', json: true,
             });
             assert.deepEqual(parseArgs(['-p', '/a', '--json'], {}).json, true);
         });
         it('las carpetas relativas son relativas a la carpeta actual', function () {
             assert.deepEqual(parseArgs(['-p', 'a'], {}).roots, [join(process.cwd(), 'a')]);
             assert.deepEqual(parseArgs([], { path: ['b'] }).roots, [join(process.cwd(), 'b')]);
+        });
+        it('parsePriority', function () {
+            assert.deepEqual(parsePriority('qa-control=1'), ['qa-control', 1]);
+            assert.deepEqual(parsePriority('@s/p=-3'), ['@s/p', -3]);
+            assert.throws(function () { parsePriority('qa-control'); }, /^Error: --priority qa-control no tiene la forma paquete=número$/);
+            assert.throws(function () { parsePriority('x=uno'); }, /no tiene la forma/);
         });
         it('sin carpetas es un error', function () {
             assert.throws(function () { parseArgs([], {}); }, /^Error: Falta indicar la carpeta con --path o definir los parámetros predeterminados en ~\/\.bussing\.yaml$/);
@@ -87,8 +95,8 @@ describe('bussing-cli', function () {
             ],
             ignored: ['/r/viejo'],
             cleanupOrder: [
-                { name: 'a', dir: '/r/a', level: 0, mainProblem: 'unpushed', dependsOn: [], inCycleWith: [] },
-                { name: 'x', dir: '/r/x2', level: 1, mainProblem: null, dependsOn: ['a'], inCycleWith: ['y'] },
+                { name: 'a', dir: '/r/a', level: 0, mainProblem: 'unpushed', dependsOn: [], inCycleWith: [], deferred: ['q'] },
+                { name: 'x', dir: '/r/x2', level: 1, mainProblem: null, dependsOn: ['a'], inCycleWith: ['y'], deferred: ['p', 'q'] },
             ],
             warnings: [{ check: 'cross-dependencies', message: 'global' }],
         };
@@ -102,8 +110,8 @@ describe('bussing-cli', function () {
             '  ? advertencia (repo): algo',
             '',
             'Orden de limpieza (los del mismo número no dependen entre sí):',
-            '  1. a  falta pushear',
-            '  2. x [x2]  por dependencia  (depende de a; ciclo con y)',
+            '  1. a  falta pushear  (ciclo: q se actualiza después)',
+            '  2. x [x2]  por dependencia  (depende de a; ciclo con y; ciclo: p, q se actualizan después)',
             '',
             'advertencia (cross-dependencies): global',
             '',
