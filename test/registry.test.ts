@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { create } from 'tar';
-import { describeFetchError, packumentUrl, parsePackument, readTarball, verifyIntegrity } from '../src/registry.js';
+import { describeFetchError, packumentUrl, parsePackument, readTarball, verifyIntegrity } from '../dist/registry.js';
 import { tempDir, writeFiles } from './helpers.js';
 
 describe('registry', function () {

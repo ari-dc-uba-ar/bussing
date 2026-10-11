@@ -1,5 +1,5 @@
 import { strict as assert } from 'node:assert';
-import { computeCleanupOrder, type OrderNode } from '../src/order.js';
+import { computeCleanupOrder, type OrderNode } from '../dist/order.js';
 
 function node(name: string, ownProblems: boolean, dependsOn: string[] = [], weakDependsOn: string[] = []): OrderNode {
     const dirs = function (list: string[]): string[] { return list.map(function (dep) { return `/r/${dep}`; }); };

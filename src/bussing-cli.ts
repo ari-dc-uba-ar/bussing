@@ -3,8 +3,9 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
-import { cli } from 'cleye';
+import { basename, join, resolve } from 'node:path';
+import { cli, parseCommandLine, runMain } from 'commendatore';
+import type { ExitCode } from 'commendatore';
 import { guarantee, is, type Description, type GuaranteedType } from 'guarantee-type';
 import { load } from 'js-yaml';
 import { DEFAULT_REGISTRY_URL, createNpmRegistry, reviewEnvironment } from './bussing.js';
@@ -15,6 +16,12 @@ export const EXIT_CODE = {
     error: 1,
     problems: 2,
 } as const;
+
+const EXIT_CODES: ExitCode[] = [
+    { code: EXIT_CODE.clean, description: 'sin problemas' },
+    { code: EXIT_CODE.error, description: 'error' },
+    { code: EXIT_CODE.problems, description: 'hay problemas' },
+];
 
 /** Archivo opcional, en la carpeta del usuario, con valores por omisión para los parámetros. */
 const DEFAULTS_FILE_NAME = '.bussing.yaml';
@@ -90,17 +97,6 @@ export interface CliOptions {
 }
 
 
-/** Versión del package.json del propio paquete: el primero que se encuentra subiendo desde la carpeta de este módulo. */
-function packageVersion(): string {
-    let dir = import.meta.dirname;
-    while (!existsSync(join(dir, 'package.json'))) {
-        const parent = dirname(dir);
-        if (parent === dir) throw new Error('No se encontró el package.json de bussing');
-        dir = parent;
-    }
-    return guarantee(is.object({ version: is.string }), JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))).version;
-}
-
 /**
  * Lee el archivo de valores por omisión. Si no existe o está vacío no hay valores por omisión.
  * `label` es el nombre del archivo en los mensajes de error.
@@ -134,20 +130,23 @@ export function readDefaults(file: string, label: string): Defaults {
     return defaults;
 }
 
-/** Interpreta los argumentos. cleye muestra la ayuda y termina el proceso ante `--help`, `--version` o un flag desconocido. */
-export function parseArgs(argv: string[], defaults: Defaults): CliOptions {
-    const parsed = cli({
-        name: 'bussing',
-        version: packageVersion(),
-        flags,
-        strictFlags: true,
-        help: {
-            description: 'Revisa los repositorios locales y muestra los que quedaron desprolijos y el orden en que conviene limpiarlos.\n' +
-                `Los valores por omisión de los parámetros se pueden definir en ${DEFAULTS_FILE_LABEL} (las claves son los nombres de los parámetros).\n` +
-                `Códigos de salida: ${EXIT_CODE.clean} sin problemas, ${EXIT_CODE.error} error, ${EXIT_CODE.problems} hay problemas.`,
-            examples: ['bussing --path ../repos --path ../otros-repos --ignore repo-viejo', 'bussing --priority qa-control=1 --priority require-bro=-1', 'bussing --json'],
-        },
-    }, undefined, argv);
+/**
+ * Interpreta los argumentos. cleye muestra la ayuda y termina el proceso ante `--help`, `--version` o un flag desconocido.
+ * La primera línea de la salida es la versión, salvo que la salida sea JSON; `write` indica dónde se escribe (por omisión, la salida estándar).
+ */
+export function parseArgs(argv: string[], defaults: Defaults, write?: (text: string) => void): CliOptions {
+    const { parsed } = parseCommandLine({
+        moduleUrl: import.meta.url,
+        description: 'Revisa los repositorios locales y muestra los que quedaron desprolijos y el orden en que conviene limpiarlos.\n' +
+            `Los valores por omisión de los parámetros se pueden definir en ${DEFAULTS_FILE_LABEL} (las claves son los nombres de los parámetros).`,
+        examples: ['bussing --path ../repos --path ../otros-repos --ignore repo-viejo', 'bussing --priority qa-control=1 --priority require-bro=-1', 'bussing --json'],
+        exitCodes: EXIT_CODES,
+    }, function (base) {
+        return cli({ ...base, flags }, undefined, argv);
+    }, {
+        show: function (parsedArgs) { return !(parsedArgs.flags.json ?? defaults.json ?? false); },
+        ...(write === undefined ? {} : { write }),
+    });
     // las carpetas relativas son relativas a la carpeta actual, vengan de la línea de comandos o del archivo
     const roots = (parsed.flags.path.length > 0 ? parsed.flags.path : defaults.path ?? []).map(function (path) { return resolve(path); });
     if (roots.length === 0) {
@@ -216,6 +215,12 @@ export const CATEGORY_LABEL: Record<ProblemCategory, string> = {
     'altered-node-modules': 'node_modules alterado',
     'waiting-dependencies': 'espera dependencias',
     'outdated-dependencies': 'dependencias desactualizadas',
+    'waiting-peer-dependencies': 'espera dependencias-peer',
+    'outdated-peer-dependencies': 'dependencias-peer desactualizadas',
+    'waiting-optional-dependencies': 'espera dependencias-opt',
+    'outdated-optional-dependencies': 'dependencias-opt desactualizadas',
+    'waiting-dev-dependencies': 'espera dependencias-dev',
+    'outdated-dev-dependencies': 'dependencias-dev desactualizadas',
     'version-not-bumped': 'falta subir versión',
     'unpublished': 'falta publicar',
 };
@@ -266,8 +271,5 @@ export async function main(argv: string[]): Promise<number> {
 
 // Solo se ejecuta al invocarlo como programa (no al importarlo desde los tests)
 if (import.meta.main) {
-    main(process.argv.slice(2)).then(function (code) { process.exitCode = code; }, function (err: unknown) {
-        process.stderr.write(`${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
-        process.exitCode = EXIT_CODE.error;
-    });
+    runMain(function () { return main(process.argv.slice(2)); }, EXIT_CODE.error);
 }

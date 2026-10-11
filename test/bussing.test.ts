@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { reviewEnvironment } from '../src/bussing.js';
+import { reviewEnvironment } from '../dist/bussing.js';
 import { fakeRegistry, gitRepo, packageJson, packument, tempDir, writeFiles } from './helpers.js';
 
 describe('bussing', function () {
@@ -60,8 +60,8 @@ describe('bussing', function () {
         await writeFiles(join(root, 'b'), { 'package.json': packageJson({ name: 'b', version: '0.2.0', private: true, devDependencies: { a: '^0.9.0' } }) });
         const report = await reviewEnvironment({ roots: [root], registry: fakeRegistry({}) });
         assert.deepEqual(report.cleanupOrder.map(function (step) { return [step.level, step.name, step.mainProblem, step.dependsOn, step.deferred]; }), [
-            [0, 'b', 'outdated-dependencies', [], ['a']],
-            [1, 'a', 'waiting-dependencies', ['b'], []],
+            [0, 'b', 'outdated-dev-dependencies', [], ['a']],
+            [1, 'a', 'waiting-dev-dependencies', ['b'], []],
         ]);
     });
 

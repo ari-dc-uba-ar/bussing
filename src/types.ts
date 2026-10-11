@@ -76,9 +76,15 @@ export type ProblemCategory =
     | 'uncommitted'
     | 'unpushed'
     | 'altered-node-modules'
-    /** Tiene dependencias desactualizadas y alguna de ellas tiene a su vez problemas propios. */
+    /** Tiene dependencias desactualizadas y alguna de ellas, con problemas propios, va antes en el orden (`waiting-*`). */
     | 'waiting-dependencies'
     | 'outdated-dependencies'
+    | 'waiting-peer-dependencies'
+    | 'outdated-peer-dependencies'
+    | 'waiting-optional-dependencies'
+    | 'outdated-optional-dependencies'
+    | 'waiting-dev-dependencies'
+    | 'outdated-dev-dependencies'
     | 'version-not-bumped'
     | 'unpublished';
 

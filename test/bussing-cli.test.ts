@@ -1,8 +1,8 @@
 import { strict as assert } from 'node:assert';
 import { join } from 'node:path';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { describeProblem, EXIT_CODE, formatReport, main, parseArgs, parsePriority, readDefaults } from '../src/bussing-cli.js';
-import type { BussingReport, Problem } from '../src/types.js';
+import { describeProblem, EXIT_CODE, formatReport, main, parseArgs, parsePriority, readDefaults } from '../dist/bussing-cli.js';
+import type { BussingReport, Problem } from '../dist/types.js';
 import { gitRepo, packageJson, tempDir } from './helpers.js';
 
 describe('bussing-cli', function () {
@@ -38,17 +38,19 @@ describe('bussing-cli', function () {
     });
 
     describe('parseArgs', function () {
+        /** Descarta la línea con la versión. */
+        function ignoreOutput(): void { /* nada */ }
         it('los parámetros tienen prioridad sobre los valores por omisión', function () {
             const defaults = { path: ['/d1', '/d2'], ignore: ['v'], priority: { d: 1 }, registry: 'https://d.example/', json: true };
-            assert.deepEqual(parseArgs([], defaults), { roots: ['/d1', '/d2'], ignore: ['v'], priority: { d: 1 }, registry: 'https://d.example/', json: true });
-            assert.deepEqual(parseArgs(['--path', '/a', '-p', '/b', '--ignore', 'x', '--ignore', 'y', '--priority', 'q=2', '--priority', 'r=-1', '--registry', 'https://a.example/'], defaults), {
+            assert.deepEqual(parseArgs([], defaults, ignoreOutput), { roots: ['/d1', '/d2'], ignore: ['v'], priority: { d: 1 }, registry: 'https://d.example/', json: true });
+            assert.deepEqual(parseArgs(['--path', '/a', '-p', '/b', '--ignore', 'x', '--ignore', 'y', '--priority', 'q=2', '--priority', 'r=-1', '--registry', 'https://a.example/'], defaults, ignoreOutput), {
                 roots: ['/a', '/b'], ignore: ['x', 'y'], priority: { q: 2, r: -1 }, registry: 'https://a.example/', json: true,
             });
-            assert.deepEqual(parseArgs(['-p', '/a', '--json'], {}).json, true);
+            assert.deepEqual(parseArgs(['-p', '/a', '--json'], {}, ignoreOutput).json, true);
         });
         it('las carpetas relativas son relativas a la carpeta actual', function () {
-            assert.deepEqual(parseArgs(['-p', 'a'], {}).roots, [join(process.cwd(), 'a')]);
-            assert.deepEqual(parseArgs([], { path: ['b'] }).roots, [join(process.cwd(), 'b')]);
+            assert.deepEqual(parseArgs(['-p', 'a'], {}, ignoreOutput).roots, [join(process.cwd(), 'a')]);
+            assert.deepEqual(parseArgs([], { path: ['b'] }, ignoreOutput).roots, [join(process.cwd(), 'b')]);
         });
         it('parsePriority', function () {
             assert.deepEqual(parsePriority('qa-control=1'), ['qa-control', 1]);
@@ -57,7 +59,7 @@ describe('bussing-cli', function () {
             assert.throws(function () { parsePriority('x=uno'); }, /no tiene la forma/);
         });
         it('sin carpetas es un error', function () {
-            assert.throws(function () { parseArgs([], {}); }, /^Error: Falta indicar la carpeta con --path o definir los parámetros predeterminados en ~\/\.bussing\.yaml$/);
+            assert.throws(function () { parseArgs([], {}, ignoreOutput); }, /^Error: Falta indicar la carpeta con --path o definir los parámetros predeterminados en ~\/\.bussing\.yaml$/);
         });
     });
 
@@ -130,7 +132,9 @@ describe('bussing-cli', function () {
         process.stderr.write = function (chunk: string | Uint8Array) { stderr.push(String(chunk)); return true; };
         try {
             assert.equal(await main([]), EXIT_CODE.error);
+            assert.match(stdout.join(''), /^bussing v\d+\.\d+\.\d+\n$/);
             assert.match(stderr.join(''), /^bussing: Falta indicar la carpeta/);
+            stdout.length = 0;
             const repos = join(home, 'repos');
             await mkdir(repos);
             await gitRepo(join(repos, 'x'), { 'package.json': packageJson({ name: 'x', version: '1.0.0', private: true }) });

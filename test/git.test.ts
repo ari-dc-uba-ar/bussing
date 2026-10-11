@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { countCommits, getState, isAncestor, commitExists, parseStatus } from '../src/git.js';
+import { countCommits, getState, isAncestor, commitExists, parseStatus } from '../dist/git.js';
 import { addRemote, git, gitRepo, tempDir } from './helpers.js';
 
 describe('git', function () {

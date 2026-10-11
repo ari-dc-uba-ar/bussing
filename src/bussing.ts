@@ -12,7 +12,7 @@ import type { DependencyField, BussingOptions, BussingReport, CheckName, LogFunc
 
 export type * from './types.js';
 export { createNpmRegistry, DEFAULT_REGISTRY_URL } from './registry.js';
-export { mainCategory, PROBLEM_CATEGORIES, PROBLEM_CATEGORY } from './categories.js';
+export { DEPENDENCY_CATEGORY, mainCategory, PROBLEM_CATEGORIES, PROBLEM_CATEGORY, problemCategory } from './categories.js';
 
 /** Cantidad de repositorios que se revisan en paralelo. */
 const CONCURRENCY = 8;
