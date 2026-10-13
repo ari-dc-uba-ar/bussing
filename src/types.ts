@@ -32,6 +32,11 @@ export interface BussingOptions {
     /** Nombres de subcarpetas que no se revisan. */
     ignore?: string[];
     /**
+     * Categoría menos grave que interesa (ver `PROBLEM_CATEGORIES`); los problemas de categorías menos graves no se informan
+     * ni se usan para el orden. Por omisión `DEFAULT_UP_TO` ("falta publicar", sin las devDependencies).
+     */
+    upTo?: ProblemCategory;
+    /**
      * Prioridad de cada paquete como dependencia débil (devDependency) al romper ciclos; por omisión 0.
      * Las dependencias de mayor prioridad se respetan antes en el orden; las de menor prioridad son las primeras en postergarse.
      */

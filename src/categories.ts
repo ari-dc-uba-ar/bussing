@@ -5,7 +5,8 @@ import type { DependencyField, Problem, ProblemCategory, ProblemKind } from './t
 /**
  * De la más grave a la menos grave. Primero lo que puede hacer perder trabajo, después lo que hace fallar en otros entornos.
  * Las dependencias desactualizadas van antes de subir la versión porque al corregirlas cambia el package.json.
- * Entre ellas pesa primero el campo (productivas, peer, opcionales, dev) y, dentro de un campo, esperar va antes.
+ * Entre ellas pesa primero el campo (productivas, peer, opcionales) y, dentro de un campo, esperar va antes.
+ * Las devDependencies van al final: no llegan a quien instala el paquete, así que no hacen falta para publicar.
  */
 export const PROBLEM_CATEGORIES: readonly ProblemCategory[] = [
     'uncommitted',
@@ -17,11 +18,27 @@ export const PROBLEM_CATEGORIES: readonly ProblemCategory[] = [
     'outdated-peer-dependencies',
     'waiting-optional-dependencies',
     'outdated-optional-dependencies',
-    'waiting-dev-dependencies',
-    'outdated-dev-dependencies',
     'version-not-bumped',
     'unpublished',
+    'waiting-dev-dependencies',
+    'outdated-dev-dependencies',
 ];
+
+/** Umbral por omisión: hasta "falta publicar" (sin las devDependencies). */
+export const DEFAULT_UP_TO: ProblemCategory = 'unpublished';
+
+/**
+ * Si un problema queda dentro del umbral `upTo` (la categoría menos grave que interesa). Para las dependencias
+ * desactualizadas se usa la categoría "espera" de su campo: las dos categorías de un mismo campo entran o quedan afuera juntas.
+ */
+export function withinThreshold(problem: Problem, upTo: ProblemCategory): boolean {
+    return PROBLEM_CATEGORIES.indexOf(problemCategory(problem, function () { return true; })) <= PROBLEM_CATEGORIES.indexOf(upTo);
+}
+
+/** Si la categoría queda dentro del umbral `upTo`. */
+export function categoryWithin(category: ProblemCategory, upTo: ProblemCategory): boolean {
+    return PROBLEM_CATEGORIES.indexOf(category) <= PROBLEM_CATEGORIES.indexOf(upTo);
+}
 
 /** Categoría de cada tipo de problema, salvo las dependencias desactualizadas (ver `DEPENDENCY_CATEGORY`). */
 export const PROBLEM_CATEGORY: Record<Exclude<ProblemKind, 'outdated-dependency'>, ProblemCategory> = {

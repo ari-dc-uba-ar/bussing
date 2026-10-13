@@ -2,17 +2,17 @@
 // Es la librería (el core): no lee process.argv, no escribe en la salida y no termina el proceso.
 
 import { basename } from 'node:path';
-import { fieldGravity, mainCategory, problemCategory, REACHES_DEPENDENTS } from './categories.js';
+import { categoryWithin, DEFAULT_UP_TO, fieldGravity, mainCategory, problemCategory, REACHES_DEPENDENTS, withinThreshold } from './categories.js';
 import { checkCrossDependencies, checkGit, checkInstallation, checkPublication, type CheckResult, type LocalVersions } from './checks.js';
 import { computeCleanupOrder, type OrderNode } from './order.js';
 import { createNpmRegistry } from './registry.js';
 import { declaredDependencies, findRepos, ORDER_DEPENDENCY_FIELDS, readPackageJson, WEAK_ORDER_DEPENDENCY_FIELDS, type PackageJson } from './repos.js';
 import { defined, mustGet } from './util.js';
-import type { DependencyField, BussingOptions, BussingReport, CheckName, LogFunction, RepoReport, Warning } from './types.js';
+import type { DependencyField, ProblemCategory, BussingOptions, BussingReport, CheckName, LogFunction, RepoReport, Warning } from './types.js';
 
 export type * from './types.js';
 export { createNpmRegistry, DEFAULT_REGISTRY_URL } from './registry.js';
-export { DEPENDENCY_CATEGORY, mainCategory, PROBLEM_CATEGORIES, PROBLEM_CATEGORY, problemCategory, REACHES_DEPENDENTS } from './categories.js';
+export { DEFAULT_UP_TO, DEPENDENCY_CATEGORY, mainCategory, PROBLEM_CATEGORIES, PROBLEM_CATEGORY, problemCategory, REACHES_DEPENDENTS, withinThreshold } from './categories.js';
 
 /** Cantidad de repositorios que se revisan en paralelo. */
 const CONCURRENCY = 8;
@@ -55,6 +55,8 @@ export async function reviewEnvironment(options: BussingOptions): Promise<Bussin
     const log: LogFunction = options.log ?? function () { /* sin informe de progreso */ };
     const warnings: Warning[] = [];
     const ignore = options.ignore ?? [];
+    const upTo = options.upTo ?? DEFAULT_UP_TO;
+    const considered = function (category: ProblemCategory): boolean { return categoryWithin(category, upTo); };
     const { repos: dirs, ignored } = await findRepos(options.roots, ignore);
     for (const name of ignore) {
         if (!ignored.some(function (dir) { return basename(dir) === name; })) {
@@ -105,9 +107,17 @@ export async function reviewEnvironment(options: BussingOptions): Promise<Bussin
             return result;
         });
         if (pkg === null) return;
-        await runCheck(report, 'publication', function () { return checkPublication(report.dir, pkg, gitState, registry); });
-        await runCheck(report, 'cross-dependencies', function () { return checkCrossDependencies(pkg, localVersions); });
-        await runCheck(report, 'installation', function () { return checkInstallation(report.dir, localNames, registry); });
+        // los controles que solo pueden dar problemas fuera del umbral no se hacen
+        if (considered('version-not-bumped')) {
+            await runCheck(report, 'publication', function () { return checkPublication(report.dir, pkg, gitState, registry); });
+        }
+        if (considered('waiting-dependencies')) {
+            await runCheck(report, 'cross-dependencies', function () { return checkCrossDependencies(pkg, localVersions); });
+        }
+        if (considered('altered-node-modules')) {
+            await runCheck(report, 'installation', function () { return checkInstallation(report.dir, localNames, registry); });
+        }
+        report.problems = report.problems.filter(function (problem) { return withinThreshold(problem, upTo); });
     });
 
     /** Repositorios revisados de los que depende en los campos indicados, con el campo más grave si figura en varios. */
@@ -122,6 +132,9 @@ export async function reviewEnvironment(options: BussingOptions): Promise<Bussin
         return [...result].map(function ([dir, field]) { return { dir, field }; });
     }
     const noWait = function (): boolean { return false; };
+    const devDependencies = function (report: RepoReport, pkg: PackageJson | null): string[] {
+        return localDependencies(report, pkg, WEAK_ORDER_DEPENDENCY_FIELDS).map(function (dep) { return dep.dir; });
+    };
     const priority = new Map(Object.entries(options.dependencyPriority ?? {}));
     for (const name of priority.keys()) {
         if (!uniqueDirByName.has(name)) warnings.push({ check: 'order', message: `ningún repositorio revisado tiene el paquete ${name} (prioridad de dependencia)` });
@@ -133,7 +146,9 @@ export async function reviewEnvironment(options: BussingOptions): Promise<Bussin
             mainProblem: mainCategory(report.problems, noWait),
             reachesDependents: report.problems.some(function (problem) { return REACHES_DEPENDENTS[problemCategory(problem, noWait)]; }),
             dependsOn: localDependencies(report, pkg, ORDER_DEPENDENCY_FIELDS),
-            weakDependsOn: localDependencies(report, pkg, WEAK_ORDER_DEPENDENCY_FIELDS).map(function (dep) { return dep.dir; }),
+            // si las devDependencies quedan fuera del umbral no definen niveles, solo ordenan dentro de cada nivel
+            weakDependsOn: considered('waiting-dev-dependencies') ? devDependencies(report, pkg) : [],
+            tieDependsOn: considered('waiting-dev-dependencies') ? [] : devDependencies(report, pkg),
         };
     });
     const cleanupOrder = computeCleanupOrder(nodes, priority);

@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { join } from 'node:path';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { describeProblem, EXIT_CODE, formatReport, main, parseArgs, parsePriority, readDefaults } from '../src/bussing-cli.js';
+import { describeProblem, EXIT_CODE, formatReport, main, parseArgs, parseCategory, parsePriority, readDefaults } from '../src/bussing-cli.js';
 import type { BussingReport, Problem } from '../src/types.js';
 import { gitRepo, packageJson, tempDir } from './helpers.js';
 
@@ -27,13 +27,19 @@ describe('bussing-cli', function () {
             const dir = await tempDir();
             const file = join(dir, 'd.yaml');
             await writeFile(file, 'paths: [a]\n');
-            assert.throws(function () { readDefaults(file, '~/x.yaml'); }, /^Error: ~\/x\.yaml tiene claves desconocidas: paths \(las claves válidas son: path, ignore, priority, registry, json\)$/);
+            assert.throws(function () { readDefaults(file, '~/x.yaml'); }, /^Error: ~\/x\.yaml tiene claves desconocidas: paths \(las claves válidas son: path, ignore, priority, up-to, dev, registry, json\)$/);
             await writeFile(file, 'path: [a\n');
             assert.throws(function () { readDefaults(file, '~/x.yaml'); }, /^Error: ~\/x\.yaml no es un YAML válido/);
             await writeFile(file, '- a\n');
             assert.throws(function () { readDefaults(file, '~/x.yaml'); }, /^Error: ~\/x\.yaml no contiene claves y valores$/);
             await writeFile(file, 'json: 3\n');
             assert.throws(function () { readDefaults(file, '~/x.yaml'); }, /^Error: ~\/x\.yaml tiene valores de tipo incorrecto \(.*json/);
+            await writeFile(file, 'up-to: todo\n');
+            assert.throws(function () { readDefaults(file, '~/x.yaml'); }, /^Error: ~\/x\.yaml up-to todo no es una categoría \(las categorías son: uncommitted, /);
+            await writeFile(file, 'up-to: unpublished\ndev: true\n');
+            assert.throws(function () { readDefaults(file, '~/x.yaml'); }, /^Error: ~\/x\.yaml tiene dev y up-to a la vez/);
+            await writeFile(file, 'up-to: unpushed\n');
+            assert.deepEqual(readDefaults(file, '~/x.yaml'), { 'up-to': 'unpushed' });
         });
     });
 
@@ -41,16 +47,30 @@ describe('bussing-cli', function () {
         /** Descarta la línea con la versión. */
         function ignoreOutput(): void { /* nada */ }
         it('los parámetros tienen prioridad sobre los valores por omisión', function () {
-            const defaults = { path: ['/d1', '/d2'], ignore: ['v'], priority: { d: 1 }, registry: 'https://d.example/', json: true };
-            assert.deepEqual(parseArgs([], defaults, ignoreOutput), { roots: ['/d1', '/d2'], ignore: ['v'], priority: { d: 1 }, registry: 'https://d.example/', json: true });
-            assert.deepEqual(parseArgs(['--path', '/a', '-p', '/b', '--ignore', 'x', '--ignore', 'y', '--priority', 'q=2', '--priority', 'r=-1', '--registry', 'https://a.example/'], defaults, ignoreOutput), {
-                roots: ['/a', '/b'], ignore: ['x', 'y'], priority: { q: 2, r: -1 }, registry: 'https://a.example/', json: true,
+            const defaults = { path: ['/d1', '/d2'], ignore: ['v'], priority: { d: 1 }, 'up-to': 'unpushed' as const, registry: 'https://d.example/', json: true };
+            assert.deepEqual(parseArgs([], defaults, ignoreOutput), { roots: ['/d1', '/d2'], ignore: ['v'], upTo: 'unpushed', priority: { d: 1 }, registry: 'https://d.example/', json: true });
+            assert.deepEqual(parseArgs(['--path', '/a', '-p', '/b', '--ignore', 'x', '--ignore', 'y', '--priority', 'q=2', '--priority', 'r=-1', '--up-to', 'version-not-bumped', '--registry', 'https://a.example/'], defaults, ignoreOutput), {
+                roots: ['/a', '/b'], ignore: ['x', 'y'], upTo: 'version-not-bumped', priority: { q: 2, r: -1 }, registry: 'https://a.example/', json: true,
             });
             assert.deepEqual(parseArgs(['-p', '/a', '--json'], {}, ignoreOutput).json, true);
         });
         it('las carpetas relativas son relativas a la carpeta actual', function () {
             assert.deepEqual(parseArgs(['-p', 'a'], {}, ignoreOutput).roots, [join(process.cwd(), 'a')]);
             assert.deepEqual(parseArgs([], { path: ['b'] }, ignoreOutput).roots, [join(process.cwd(), 'b')]);
+        });
+        it('umbral: por omisión hasta unpublished; --dev es un atajo de --up-to outdated-dev-dependencies', function () {
+            assert.equal(parseArgs(['-p', '/a'], {}, ignoreOutput).upTo, 'unpublished');
+            assert.equal(parseArgs(['-p', '/a', '--dev'], {}, ignoreOutput).upTo, 'outdated-dev-dependencies');
+            assert.equal(parseArgs(['-p', '/a'], { dev: true }, ignoreOutput).upTo, 'outdated-dev-dependencies');
+            assert.equal(parseArgs(['-p', '/a', '--dev=false'], { dev: true }, ignoreOutput).upTo, 'unpublished');
+            assert.equal(parseArgs(['-p', '/a', '--up-to', 'unpushed'], { dev: true }, ignoreOutput).upTo, 'unpushed');
+            assert.equal(parseArgs(['-p', '/a', '--dev'], { 'up-to': 'unpushed' }, ignoreOutput).upTo, 'outdated-dev-dependencies');
+            assert.throws(function () { parseArgs(['-p', '/a', '--dev', '--up-to', 'unpushed'], {}, ignoreOutput); }, /^Error: Se indicaron --dev y --up-to a la vez/);
+            assert.throws(function () { parseArgs(['-p', '/a', '--up-to', 'todo'], {}, ignoreOutput); }, /^Error: --up-to todo no es una categoría/);
+        });
+        it('parseCategory', function () {
+            assert.equal(parseCategory('unpublished'), 'unpublished');
+            assert.throws(function () { parseCategory('nada', 'origen'); }, /^Error: origen nada no es una categoría/);
         });
         it('parsePriority', function () {
             assert.deepEqual(parsePriority('qa-control=1'), ['qa-control', 1]);
@@ -111,7 +131,7 @@ describe('bussing-cli', function () {
             '/r/b',
             '  ? advertencia (repo): algo',
             '',
-            'Orden de limpieza (los del mismo número no dependen entre sí):',
+            'Orden de limpieza (los del mismo número no dependen entre sí; dentro de cada número se respetan además las dependencias fuera del umbral):',
             '  1. a  falta pushear  (ciclo: q se actualiza después)',
             '  2. x [x2]  por dependencia-peer  (depende de a; ciclo con y; ciclo: p, q se actualizan después)',
             '',

@@ -59,7 +59,7 @@ describe('bussing', function () {
         await writeFiles(join(root, 'a'), { 'package.json': packageJson({ name: 'a', version: '1.0.0', private: true, devDependencies: { b: '^0.1.0' } }) });
         await writeFiles(join(root, 'b'), { 'package.json': packageJson({ name: 'b', version: '0.2.0', private: true, devDependencies: { a: '^0.9.0' } }) });
         const order = async function (): Promise<(string | number | string[] | null)[][]> {
-            const report = await reviewEnvironment({ roots: [root], registry: fakeRegistry({}) });
+            const report = await reviewEnvironment({ roots: [root], upTo: 'outdated-dev-dependencies', registry: fakeRegistry({}) });
             return report.cleanupOrder.map(function (step) { return [step.level, step.name, step.mainProblem, step.dependsOn, step.deferred]; });
         };
         // los problemas de b son solo de devDependencies: no hay que esperarlo
@@ -67,12 +67,30 @@ describe('bussing', function () {
             [0, 'b', 'outdated-dev-dependencies', [], ['a']],
             [1, 'a', 'outdated-dev-dependencies', ['b'], []],
         ]);
-        // b no está publicado: hay que esperarlo
+        // b no está publicado: hay que esperarlo (y "falta publicar" es más grave que sus devDependencies)
         await writeFiles(join(root, 'b'), { 'package.json': packageJson({ name: 'b', version: '0.2.0', devDependencies: { a: '^0.9.0' } }) });
         assert.deepEqual(await order(), [
-            [0, 'b', 'outdated-dev-dependencies', [], ['a']],
+            [0, 'b', 'unpublished', [], ['a']],
             [1, 'a', 'waiting-dev-dependencies', ['b'], []],
         ]);
+    });
+
+    it('el umbral deja afuera las categorías menos graves (por omisión, las devDependencies)', async function () {
+        const root = await tempDir();
+        await writeFiles(join(root, 'a'), { 'package.json': packageJson({ name: 'a', version: '1.0.0', devDependencies: { b: '^0.1.0' } }) });
+        await writeFiles(join(root, 'b'), { 'package.json': packageJson({ name: 'b', version: '0.2.0', private: true }) });
+        const kinds = async function (upTo?: 'unpushed' | 'version-not-bumped' | 'outdated-dev-dependencies'): Promise<string[]> {
+            let consulted = false;
+            const registry = fakeRegistry({});
+            registry.getPackument = async function () { consulted = true; return null; };
+            const report = await reviewEnvironment({ roots: [root], registry, ...(upTo === undefined ? {} : { upTo }) });
+            const repo = report.repos.find(function (r) { return r.name === 'a'; });
+            return [...(repo?.problems.map(function (p) { return p.kind; }) ?? []), consulted ? 'consultó npm' : 'no consultó npm'];
+        };
+        assert.deepEqual(await kinds(), ['not-published', 'consultó npm']);
+        assert.deepEqual(await kinds('outdated-dev-dependencies'), ['not-published', 'outdated-dependency', 'consultó npm']);
+        assert.deepEqual(await kinds('version-not-bumped'), ['consultó npm']);
+        assert.deepEqual(await kinds('unpushed'), ['no consultó npm']);
     });
 
     it('un control que falla se informa como advertencia', async function () {

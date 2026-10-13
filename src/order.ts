@@ -19,6 +19,11 @@ export interface OrderNode {
     dependsOn: { dir: string; field: DependencyField }[];
     /** Carpetas de los repositorios revisados de los que depende como devDependency (débiles: se respetan salvo que cierren un ciclo). */
     weakDependsOn: string[];
+    /**
+     * Carpetas de los repositorios revisados de los que depende por campos que quedaron fuera del umbral: no definen niveles,
+     * solo ordenan dentro de un mismo nivel (salvo que cierren un ciclo).
+     */
+    tieDependsOn: string[];
 }
 
 function byName(a: { name: string; dir: string }, b: { name: string; dir: string }): number {
@@ -165,5 +170,52 @@ export function computeCleanupOrder(nodes: OrderNode[], priority: ReadonlyMap<st
             inCycleWith: names(dirs.filter(function (other) { return other !== dir && mustGet(component, other) === id; })),
         };
     });
-    return steps.sort(function (a, b) { return a.level - b.level || byName(a, b); });
+    const byLevel = new Map<number, CleanupStep[]>();
+    for (const step of steps) byLevel.set(step.level, [...(byLevel.get(step.level) ?? []), step]);
+    return [...byLevel.keys()].sort(function (a, b) { return a - b; }).flatMap(function (level) {
+        return orderWithinLevel(mustGet(byLevel, level), function (dir) { return mustGet(byDir, dir).tieDependsOn; }, priorityOf);
+    });
+}
+
+/**
+ * Ordena los pasos de un mismo nivel: primero los que no dependen (por `tieDependsOn`) de otro paso del nivel y, a igualdad,
+ * por nombre. Las dependencias se agregan de mayor a menor prioridad y se descartan las que cerrarían un ciclo.
+ */
+function orderWithinLevel(steps: CleanupStep[], tieDependsOn: (dir: string) => string[], priorityOf: (dir: string) => number): CleanupStep[] {
+    const byDir = new Map(steps.map(function (step) { return [step.dir, step] as const; }));
+    const edges = new Map<string, Set<string>>(steps.map(function (step) { return [step.dir, new Set<string>()] as const; }));
+    const candidates: [string, string][] = [];
+    for (const step of steps) {
+        for (const dep of tieDependsOn(step.dir)) if (byDir.has(dep) && dep !== step.dir) candidates.push([step.dir, dep]);
+    }
+    candidates.sort(function ([dirA, depA], [dirB, depB]) {
+        return priorityOf(depB) - priorityOf(depA) || byName(mustGet(byDir, dirA), mustGet(byDir, dirB)) || byName(mustGet(byDir, depA), mustGet(byDir, depB));
+    });
+    const reachesDir = function (from: string, to: string): boolean {
+        const visited = new Set<string>();
+        const pending = [from];
+        while (pending.length > 0) {
+            const current = defined(pending.pop(), 'pendiente');
+            if (current === to) return true;
+            if (visited.has(current)) continue;
+            visited.add(current);
+            pending.push(...mustGet(edges, current));
+        }
+        return false;
+    };
+    for (const [dir, dep] of candidates) {
+        if (!reachesDir(dep, dir)) mustGet(edges, dir).add(dep);
+    }
+    // Kahn: en cada paso, el de menor nombre entre los que ya no tienen dependencias pendientes
+    const result: CleanupStep[] = [];
+    const done = new Set<string>();
+    while (result.length < steps.length) {
+        const ready = steps.filter(function (step) {
+            return !done.has(step.dir) && [...mustGet(edges, step.dir)].every(function (dep) { return done.has(dep); });
+        }).sort(byName);
+        const next = defined(ready[0], 'paso sin dependencias pendientes');
+        done.add(next.dir);
+        result.push(next);
+    }
+    return result;
 }

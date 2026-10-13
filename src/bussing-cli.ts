@@ -8,7 +8,7 @@ import { cli, parseCommandLine, runMain } from 'commendatore';
 import type { ExitCode } from 'commendatore';
 import { guarantee, is, type Description, type GuaranteedType } from 'guarantee-type';
 import { load } from 'js-yaml';
-import { DEFAULT_REGISTRY_URL, createNpmRegistry, reviewEnvironment } from './bussing.js';
+import { DEFAULT_REGISTRY_URL, DEFAULT_UP_TO, PROBLEM_CATEGORIES, createNpmRegistry, reviewEnvironment } from './bussing.js';
 import type { BussingOptions, DependencyField, ProblemCategory, BussingReport, CleanupStep, Problem, RepoReport, Warning } from './bussing.js';
 
 export const EXIT_CODE = {
@@ -42,6 +42,16 @@ export function parsePriority(value: string): [string, number] {
     return [match[1], Number(match[2])];
 }
 
+/** Categoría a la que equivale `--dev`: incluye las dos categorías de devDependencies, que son las menos graves. */
+const DEV_UP_TO: ProblemCategory = 'outdated-dev-dependencies';
+
+/** Interpreta el nombre de una categoría (las claves del informe JSON). `source` indica de dónde viene, para el mensaje de error. */
+export function parseCategory(value: string, source = '--up-to'): ProblemCategory {
+    const category = PROBLEM_CATEGORIES.find(function (candidate) { return candidate === value; });
+    if (category === undefined) throw new Error(`${source} ${value} no es una categoría (las categorías son: ${PROBLEM_CATEGORIES.join(', ')})`);
+    return category;
+}
+
 /** Parámetros de la línea de comandos. Las mismas claves se pueden usar en el archivo de valores por omisión. */
 const flags = {
     path: {
@@ -57,6 +67,14 @@ const flags = {
         type: [parsePriority],
         description: 'Prioridad de un paquete como devDependency al romper ciclos del orden de limpieza, como paquete=número ' +
             '(por omisión 0; las de mayor número se respetan primero); se puede repetir',
+    },
+    'up-to': {
+        type: function (value: string): ProblemCategory { return parseCategory(value); },
+        description: `Categoría menos grave que se informa (por omisión ${DEFAULT_UP_TO}). De más grave a menos grave: ${PROBLEM_CATEGORIES.join(', ')}`,
+    },
+    dev: {
+        type: Boolean,
+        description: `Incluye las devDependencies (equivale a --up-to ${DEV_UP_TO})`,
     },
     registry: {
         type: String,
@@ -77,6 +95,8 @@ const defaultsFields = {
     ignore: { optional: is.union([is.string, is.array.string]) },
     // en el archivo es un mapa paquete: número
     priority: is.optional.recordString.number,
+    'up-to': is.optional.string,
+    dev: is.optional.boolean,
     registry: is.optional.string,
     json: is.optional.boolean,
 } satisfies Record<FlagName, Description>;
@@ -85,12 +105,13 @@ const defaultsDescription = is.object(defaultsFields);
 
 type DefaultsFile = GuaranteedType<typeof defaultsDescription>;
 
-/** Valores por omisión ya normalizados: `path` e `ignore` siempre son listas. */
-export type Defaults = Omit<DefaultsFile, 'path' | 'ignore'> & { path?: string[]; ignore?: string[] };
+/** Valores por omisión ya normalizados: `path` e `ignore` siempre son listas y `up-to` es una categoría válida. */
+export type Defaults = Omit<DefaultsFile, 'path' | 'ignore' | 'up-to'> & { path?: string[]; ignore?: string[]; 'up-to'?: ProblemCategory };
 
 export interface CliOptions {
     roots: string[];
     ignore: string[];
+    upTo: ProblemCategory;
     priority: Record<string, number>;
     registry: string;
     json: boolean;
@@ -123,10 +144,12 @@ export function readDefaults(file: string, label: string): Defaults {
     } catch (err) {
         throw new Error(`${label} tiene valores de tipo incorrecto (${err instanceof Error ? err.message : String(err)})`);
     }
-    const { path, ignore, ...others } = values;
+    const { path, ignore, 'up-to': upTo, ...others } = values;
     const defaults: Defaults = others;
     if (path !== undefined) defaults.path = typeof path === 'string' ? [path] : path;
     if (ignore !== undefined) defaults.ignore = typeof ignore === 'string' ? [ignore] : ignore;
+    if (upTo !== undefined) defaults['up-to'] = parseCategory(upTo, `${label} up-to`);
+    if (defaults.dev !== undefined && upTo !== undefined) throw new Error(`${label} tiene dev y up-to a la vez (dev equivale a up-to ${DEV_UP_TO})`);
     return defaults;
 }
 
@@ -152,9 +175,16 @@ export function parseArgs(argv: string[], defaults: Defaults, write?: (text: str
     if (roots.length === 0) {
         throw new Error(`Falta indicar la carpeta con --path o definir los parámetros predeterminados en ${DEFAULTS_FILE_LABEL}`);
     }
+    const flagUpTo = parsed.flags['up-to'];
+    const flagDev = parsed.flags.dev;
+    if (flagUpTo !== undefined && flagDev !== undefined) throw new Error(`Se indicaron --dev y --up-to a la vez (--dev equivale a --up-to ${DEV_UP_TO})`);
+    // la línea de comandos tiene prioridad sobre el archivo; --dev y dev son atajos de up-to
+    const upTo = flagUpTo ?? (flagDev !== undefined ? (flagDev ? DEV_UP_TO : DEFAULT_UP_TO)
+        : defaults['up-to'] ?? (defaults.dev === true ? DEV_UP_TO : DEFAULT_UP_TO));
     return {
         roots,
         ignore: parsed.flags.ignore.length > 0 ? parsed.flags.ignore : defaults.ignore ?? [],
+        upTo,
         priority: parsed.flags.priority.length > 0 ? Object.fromEntries(parsed.flags.priority) : defaults.priority ?? {},
         registry: parsed.flags.registry ?? defaults.registry ?? DEFAULT_REGISTRY_URL,
         json: parsed.flags.json ?? defaults.json ?? false,
@@ -251,7 +281,7 @@ export function formatReport(report: BussingReport): string {
         (report.ignored.length > 0 ? ` (${plural(report.ignored.length, 'ignorado', 'ignorados')}: ${report.ignored.map(function (dir) { return basename(dir); }).join(', ')})` : '')];
     for (const repo of [...withProblems, ...withWarningsOnly]) lines.push('', ...describeRepo(repo));
     if (report.cleanupOrder.length > 0) {
-        lines.push('', 'Orden de limpieza (los del mismo número no dependen entre sí):', ...report.cleanupOrder.map(describeStep));
+        lines.push('', 'Orden de limpieza (los del mismo número no dependen entre sí; dentro de cada número se respetan además las dependencias fuera del umbral):', ...report.cleanupOrder.map(describeStep));
     }
     if (report.warnings.length > 0) lines.push('', ...report.warnings.map(describeWarning));
     return lines.join('\n') + '\n';
@@ -263,6 +293,7 @@ export async function main(argv: string[]): Promise<number> {
         const reviewOptions: BussingOptions = {
             roots: options.roots,
             ignore: options.ignore,
+            upTo: options.upTo,
             dependencyPriority: options.priority,
             registry: createNpmRegistry(options.registry),
             log: function (message) { if (process.stderr.isTTY) process.stderr.write(`\r\u001b[K${message}`); },

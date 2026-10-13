@@ -10,6 +10,7 @@ function node(name: string, ownProblems: boolean, dependsOn: string[] = [], weak
         reachesDependents: ownProblems,
         dependsOn: dirs(dependsOn).map(function (dir) { return { dir, field: 'dependencies' as const }; }),
         weakDependsOn: dirs(weakDependsOn),
+        tieDependsOn: [],
     };
 }
 
@@ -98,5 +99,27 @@ describe('computeCleanupOrder', function () {
             [1, 'usa-base', null, 'optionalDependencies'],
             [2, 'usa-usa-base', null, 'peerDependencies'],
         ]);
+    });
+    it('las dependencias fuera del umbral solo ordenan dentro de cada nivel', function () {
+        const tie = function (base: OrderNode, deps: string[]): OrderNode { return { ...base, tieDependsOn: deps.map(function (dep) { return `/r/${dep}`; }) }; };
+        const steps = computeCleanupOrder([
+            tie(node('a', true), ['c']),
+            tie(node('b', true), []),
+            tie(node('c', true), ['a']),
+            tie(node('d', true, ['b']), ['e']),
+            tie(node('e', true), []),
+        ], new Map([['a', 1]]));
+        // a y c forman un ciclo: con prioridad 1, se respeta c -> a (a primero) y se descarta a -> c
+        // d depende fuerte de b (nivel 1); su dependencia de e (nivel 0) no cambia niveles
+        assert.deepEqual(steps.map(function (step) { return [step.level, step.name]; }), [
+            [0, 'a'],
+            [0, 'b'],
+            [0, 'c'],
+            [0, 'e'],
+            [1, 'd'],
+        ]);
+        const sinPrioridad = computeCleanupOrder([tie(node('a', true), ['c']), tie(node('c', true), ['a']), tie(node('b', true), ['a'])]);
+        // sin prioridad se acepta primero a -> c (por nombre): c, después a y b (b depende de a)
+        assert.deepEqual(sinPrioridad.map(function (step) { return step.name; }), ['c', 'a', 'b']);
     });
 });
