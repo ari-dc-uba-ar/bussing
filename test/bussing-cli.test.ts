@@ -1,5 +1,5 @@
 import { strict as assert } from 'node:assert';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { describeProblem, EXIT_CODE, formatReport, main, parseArgs, parseCategory, parsePriority, readDefaults } from '../src/bussing-cli.js';
 import type { BussingReport, Problem } from '../src/types.js';
@@ -48,9 +48,9 @@ describe('bussing-cli', function () {
         function ignoreOutput(): void { /* nada */ }
         it('los parámetros tienen prioridad sobre los valores por omisión', function () {
             const defaults = { path: ['/d1', '/d2'], ignore: ['v'], priority: { d: 1 }, 'up-to': 'unpushed' as const, registry: 'https://d.example/', json: true };
-            assert.deepEqual(parseArgs([], defaults, ignoreOutput), { roots: ['/d1', '/d2'], ignore: ['v'], upTo: 'unpushed', priority: { d: 1 }, registry: 'https://d.example/', json: true });
+            assert.deepEqual(parseArgs([], defaults, ignoreOutput), { roots: [resolve('/d1'), resolve('/d2')], ignore: ['v'], upTo: 'unpushed', priority: { d: 1 }, registry: 'https://d.example/', json: true });
             assert.deepEqual(parseArgs(['--path', '/a', '-p', '/b', '--ignore', 'x', '--ignore', 'y', '--priority', 'q=2', '--priority', 'r=-1', '--up-to', 'version-not-bumped', '--registry', 'https://a.example/'], defaults, ignoreOutput), {
-                roots: ['/a', '/b'], ignore: ['x', 'y'], upTo: 'version-not-bumped', priority: { q: 2, r: -1 }, registry: 'https://a.example/', json: true,
+                roots: [resolve('/a'), resolve('/b')], ignore: ['x', 'y'], upTo: 'version-not-bumped', priority: { q: 2, r: -1 }, registry: 'https://a.example/', json: true,
             });
             assert.deepEqual(parseArgs(['-p', '/a', '--json'], {}, ignoreOutput).json, true);
         });
@@ -142,14 +142,19 @@ describe('bussing-cli', function () {
 
     it('main: errores y ejecución con los valores por omisión', async function () {
         const home = await tempDir();
-        const previous = process.env['HOME'];
+        // homedir() usa USERPROFILE en Windows y HOME en los demás sistemas
+        const homeVariable = process.platform === 'win32' ? 'USERPROFILE' : 'HOME';
+        const previous = process.env[homeVariable];
         const stdoutWrite = process.stdout.write;
         const stderrWrite = process.stderr.write;
+        const stderrIsTTY = process.stderr.isTTY;
         const stdout: string[] = [];
         const stderr: string[] = [];
-        process.env['HOME'] = home;
+        process.env[homeVariable] = home;
         process.stdout.write = function (chunk: string | Uint8Array) { stdout.push(String(chunk)); return true; };
         process.stderr.write = function (chunk: string | Uint8Array) { stderr.push(String(chunk)); return true; };
+        // sin terminal main no escribe el progreso ni lo borra, así la salida no depende de dónde se corren los tests
+        process.stderr.isTTY = false;
         try {
             assert.equal(await main([]), EXIT_CODE.error);
             assert.match(stdout.join(''), /^bussing v\d+\.\d+\.\d+\n$/);
@@ -165,7 +170,8 @@ describe('bussing-cli', function () {
         } finally {
             process.stdout.write = stdoutWrite;
             process.stderr.write = stderrWrite;
-            process.env['HOME'] = previous;
+            process.stderr.isTTY = stderrIsTTY;
+            process.env[homeVariable] = previous;
         }
     });
 });

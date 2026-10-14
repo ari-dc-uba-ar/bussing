@@ -164,7 +164,8 @@ export function parseArgs(argv: string[], defaults: Defaults, write?: (text: str
             `Los valores por omisión de los parámetros se pueden definir en ${DEFAULTS_FILE_LABEL} (las claves son los nombres de los parámetros).`,
         examples: ['bussing --path ../repos --path ../otros-repos --ignore repo-viejo', 'bussing --priority qa-control=1 --priority require-bro=-1', 'bussing --json'],
         exitCodes: EXIT_CODES,
-    }, function (base) {
+        argv,
+    }, function (base, argv) {
         return cli({ ...base, flags }, undefined, argv);
     }, {
         show: function (parsedArgs) { return !(parsedArgs.flags.json ?? defaults.json ?? false); },

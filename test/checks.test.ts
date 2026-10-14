@@ -146,7 +146,7 @@ describe('checks', function () {
                 'node_modules/.bin/x': '',
                 'target/package.json': '{}',
             });
-            await symlink(join(dir, 'target'), join(dir, 'node_modules', 'linked'));
+            await symlink(join(dir, 'target'), join(dir, 'node_modules', 'linked'), 'junction');
             const registry = fakeRegistry({}, { [tarballUrl]: filesMap({ 'package.json': '{"version":"1.0.0"}' }) });
             const result = await checkInstallation(dir, new Set(['b', '@s/c']), registry);
             assert.deepEqual(result.problems, [
