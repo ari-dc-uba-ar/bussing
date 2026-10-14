@@ -281,7 +281,7 @@ export function formatReport(report: BussingReport): string {
         (report.ignored.length > 0 ? ` (${plural(report.ignored.length, 'ignorado', 'ignorados')}: ${report.ignored.map(function (dir) { return basename(dir); }).join(', ')})` : '')];
     for (const repo of [...withProblems, ...withWarningsOnly]) lines.push('', ...describeRepo(repo));
     if (report.cleanupOrder.length > 0) {
-        lines.push('', 'Orden de limpieza (los del mismo número no dependen entre sí; dentro de cada número se respetan además las dependencias fuera del umbral):', ...report.cleanupOrder.map(describeStep));
+        lines.push('', 'Orden de limpieza:', ...report.cleanupOrder.map(describeStep));
     }
     if (report.warnings.length > 0) lines.push('', ...report.warnings.map(describeWarning));
     return lines.join('\n') + '\n';

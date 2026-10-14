@@ -131,7 +131,7 @@ describe('bussing-cli', function () {
             '/r/b',
             '  ? advertencia (repo): algo',
             '',
-            'Orden de limpieza (los del mismo número no dependen entre sí; dentro de cada número se respetan además las dependencias fuera del umbral):',
+            'Orden de limpieza:',
             '  1. a  falta pushear  (ciclo: q se actualiza después)',
             '  2. x [x2]  por dependencia-peer  (depende de a; ciclo con y; ciclo: p, q se actualizan después)',
             '',
