@@ -1,17 +1,19 @@
 // bussing: revisa el ambiente local de repositorios y arma el orden de limpieza.
 // Es la librería (el core): no lee process.argv, no escribe en la salida y no termina el proceso.
 
+import { homedir } from 'node:os';
 import { basename } from 'node:path';
-import { categoryWithin, DEFAULT_UP_TO, fieldGravity, mainCategory, problemCategory, REACHES_DEPENDENTS, withinThreshold } from './categories.js';
-import { checkCrossDependencies, checkGit, checkInstallation, checkPublication, type CheckResult, type LocalVersions } from './checks.js';
+import { readNcuConfig } from './ncurc.js';
+import { categoryWithin, DEFAULT_UP_TO, DEPENDENCY_CATEGORY, fieldGravity, mainCategory, problemCategory, REACHES_DEPENDENTS, withinThreshold } from './categories.js';
+import { checkDependencies, checkGit, checkInstallation, checkPublication, type CheckResult, type LocalVersions } from './checks.js';
 import { computeCleanupOrder, type OrderNode } from './order.js';
 import { createNpmRegistry } from './registry.js';
-import { declaredDependencies, findRepos, ORDER_DEPENDENCY_FIELDS, readPackageJson, WEAK_ORDER_DEPENDENCY_FIELDS, type PackageJson } from './repos.js';
+import { declaredDependencies, DEPENDENCY_FIELDS, findRepos, ORDER_DEPENDENCY_FIELDS, readPackageJson, WEAK_ORDER_DEPENDENCY_FIELDS, type PackageJson } from './repos.js';
 import { defined, mustGet } from './util.js';
 import type { DependencyField, ProblemCategory, BussingOptions, BussingReport, CheckName, LogFunction, RepoReport, Warning } from './types.js';
 
 export type * from './types.js';
-export { createNpmRegistry, DEFAULT_REGISTRY_URL } from './registry.js';
+export { createNpmRegistry, DEFAULT_CACHE_MAX_AGE_MS, DEFAULT_REGISTRY_URL, type NpmRegistryOptions } from './registry.js';
 export { DEFAULT_UP_TO, DEPENDENCY_CATEGORY, mainCategory, PROBLEM_CATEGORIES, PROBLEM_CATEGORY, problemCategory, REACHES_DEPENDENTS, withinThreshold } from './categories.js';
 
 /** Cantidad de repositorios que se revisan en paralelo. */
@@ -111,8 +113,13 @@ export async function reviewEnvironment(options: BussingOptions): Promise<Bussin
         if (considered('version-not-bumped')) {
             await runCheck(report, 'publication', function () { return checkPublication(report.dir, pkg, gitState, registry); });
         }
-        if (considered('waiting-dependencies')) {
-            await runCheck(report, 'cross-dependencies', function () { return checkCrossDependencies(pkg, localVersions); });
+        const fields = DEPENDENCY_FIELDS.filter(function (field) { return considered(DEPENDENCY_CATEGORY[field].waiting); });
+        if (fields.length > 0) {
+            await runCheck(report, 'cross-dependencies', async function () {
+                const ncu = await readNcuConfig(report.dir, options.ncuUserDir ?? homedir());
+                const result = await checkDependencies(pkg, localVersions, registry, ncu.config, fields);
+                return { problems: result.problems, warnings: [...ncu.warnings.map(function (message) { return { check: 'cross-dependencies' as const, message }; }), ...result.warnings] };
+            });
         }
         if (considered('altered-node-modules')) {
             await runCheck(report, 'installation', function () { return checkInstallation(report.dir, localNames, registry); });

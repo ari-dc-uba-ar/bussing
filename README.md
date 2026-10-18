@@ -23,6 +23,8 @@ The root folders are set with `--path` (it can be repeated). Every subfolder of 
 
 The optional file `~/.bussing.yaml` sets default values for the parameters; the keys are the parameter names (`bussing --help`). What is given in the command line takes precedence. Relative folders are relative to the current folder, as in the command line.
 
+npm queries are kept in memory during the run. With `--cache <folder>` (or `cache` in the file) they are also stored on disk: package documents expire after `--cache-max-age` minutes (60 by default) and tarballs never expire.
+
 ```yaml
 path:
   - /path/to/repos
@@ -52,9 +54,16 @@ The local `package.json` is compared with the npm registry:
 
 Packages with `"private": true` are not checked.
 
-### 3. Cross dependencies
+### 3. Outdated dependencies
 
-If repository **A** depends on repository **B** (both reviewed) and A's `package.json` declares B with a version lower than B's local version, A has an outdated dependency. `dependencies`, `devDependencies`, `optionalDependencies` and `peerDependencies` are checked; the declared version is the minimum of the range (`^1.2.0` is lower than `1.3.0` even if the range allows it).
+A dependency of **A** is outdated if the version declared in A's `package.json` is lower than:
+
+* the version published in npm (for any dependency, own or not), or
+* the version of the local copy, if the dependency is another reviewed repository (even if that version is not published yet).
+
+The diagnosis shows both versions (`en npm 2.2.2, local 2.3.0`). The declared version is the minimum of the range (`^1.2.0` is lower than `1.3.0` even if the range allows it). The fields within the threshold are checked (see below).
+
+The [npm-check-updates](https://www.npmjs.com/package/npm-check-updates) (`ncu`) configuration is respected: the `.ncurc`, `.ncurc.json`, `.ncurc.yaml` or `.ncurc.yml` files of the repository and, for what they do not define, those of the user's folder. `reject` and `filter` (excluded dependencies are not checked) and `target` (`latest`, `newest`, `greatest`, `minor`, `patch`, `semver` or `@tag`; `latest` by default) are used, both for the npm version and for the local one. `.ncurc.js`, `.mjs` and `.cjs` files contain code and are not interpreted.
 
 If a package name is in more than one reviewed repository, it is reported and that name is not used for cross dependencies nor for the order.
 
@@ -65,7 +74,7 @@ For each dependency in `node_modules`:
 * **`npm link`:** `node_modules/<package>` is a symbolic link.
 * **Copy (`devel-sync` or other):** the content of `node_modules/<package>` does not match the published package of the version recorded in `package-lock.json`. Only packages that are reviewed repositories are checked (the only ones copied during development). It takes into account that, when installing, npm changes CRLF to LF in the shebang of the executables declared in `bin`.
 
-### 5. Cleanup order
+### 5. Pending
 
 With the untidy repositories a topological order is built: first the ones that do not depend on any other repository of the list. Those that depend on a repository whose problems reach its users also enter, marked as "by dependency" (with the field suffix): uncommitted or unpushed changes, version not bumped or not published, or outdated production, peer or optional dependencies. Outdated devDependencies and altered node_modules do not reach the package's users. For each repository the reason it is on the list is shown.
 

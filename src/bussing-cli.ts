@@ -8,7 +8,7 @@ import { cli, parseCommandLine, runMain } from 'commendatore';
 import type { ExitCode } from 'commendatore';
 import { guarantee, is, type Description, type GuaranteedType } from 'guarantee-type';
 import { load } from 'js-yaml';
-import { DEFAULT_REGISTRY_URL, DEFAULT_UP_TO, PROBLEM_CATEGORIES, createNpmRegistry, reviewEnvironment } from './bussing.js';
+import { DEFAULT_CACHE_MAX_AGE_MS, DEFAULT_REGISTRY_URL, DEFAULT_UP_TO, PROBLEM_CATEGORIES, createNpmRegistry, reviewEnvironment } from './bussing.js';
 import type { BussingOptions, DependencyField, ProblemCategory, BussingReport, CleanupStep, Problem, RepoReport, Warning } from './bussing.js';
 
 export const EXIT_CODE = {
@@ -80,6 +80,14 @@ const flags = {
         type: String,
         description: `URL del registro de npm (por omisión ${DEFAULT_REGISTRY_URL})`,
     },
+    cache: {
+        type: String,
+        description: 'Carpeta del caché en disco de las consultas a npm (sin ella, el caché dura una corrida)',
+    },
+    'cache-max-age': {
+        type: Number,
+        description: `Minutos que se considera vigente lo guardado en el caché en disco (por omisión ${DEFAULT_CACHE_MAX_AGE_MS / 60000}); los tarballs no vencen`,
+    },
     json: {
         type: Boolean,
         description: 'Muestra el informe completo en JSON',
@@ -98,6 +106,8 @@ const defaultsFields = {
     'up-to': is.optional.string,
     dev: is.optional.boolean,
     registry: is.optional.string,
+    cache: is.optional.string,
+    'cache-max-age': is.optional.number,
     json: is.optional.boolean,
 } satisfies Record<FlagName, Description>;
 
@@ -114,6 +124,9 @@ export interface CliOptions {
     upTo: ProblemCategory;
     priority: Record<string, number>;
     registry: string;
+    /** Carpeta del caché en disco (absoluta); `null` si el caché es solo en memoria. */
+    cache: string | null;
+    cacheMaxAgeMs: number;
     json: boolean;
 }
 
@@ -182,12 +195,17 @@ export function parseArgs(argv: string[], defaults: Defaults, write?: (text: str
     // la línea de comandos tiene prioridad sobre el archivo; --dev y dev son atajos de up-to
     const upTo = flagUpTo ?? (flagDev !== undefined ? (flagDev ? DEV_UP_TO : DEFAULT_UP_TO)
         : defaults['up-to'] ?? (defaults.dev === true ? DEV_UP_TO : DEFAULT_UP_TO));
+    const cache = parsed.flags.cache ?? defaults.cache;
+    const cacheMaxAge = parsed.flags['cache-max-age'] ?? defaults['cache-max-age'];
+    if (cacheMaxAge !== undefined && !(cacheMaxAge >= 0)) throw new Error(`--cache-max-age ${cacheMaxAge} no es una cantidad de minutos`);
     return {
         roots,
         ignore: parsed.flags.ignore.length > 0 ? parsed.flags.ignore : defaults.ignore ?? [],
         upTo,
         priority: parsed.flags.priority.length > 0 ? Object.fromEntries(parsed.flags.priority) : defaults.priority ?? {},
         registry: parsed.flags.registry ?? defaults.registry ?? DEFAULT_REGISTRY_URL,
+        cache: cache === undefined ? null : resolve(cache),
+        cacheMaxAgeMs: cacheMaxAge === undefined ? DEFAULT_CACHE_MAX_AGE_MS : cacheMaxAge * 60000,
         json: parsed.flags.json ?? defaults.json ?? false,
     };
 }
@@ -216,8 +234,13 @@ export function describeProblem(problem: Problem): string {
             return `versión ${problem.version} sin publicar (en npm: ${problem.latest ?? 'sin latest'})`;
         case 'version-not-bumped':
             return `versión ${problem.version} sin subir: ${plural(problem.commitsAfterPublish, 'commit posterior', 'commits posteriores')} a la publicación`;
-        case 'outdated-dependency':
-            return `dependencia desactualizada: ${problem.dependency} "${problem.declared}" (${problem.field}), versión local ${problem.local}`;
+        case 'outdated-dependency': {
+            const references = [
+                ...(problem.published === null ? [] : [`en npm ${problem.published}`]),
+                ...(problem.local === null ? [] : [`local ${problem.local}`]),
+            ];
+            return `dependencia desactualizada: ${problem.dependency} "${problem.declared}" (${problem.field}); ${references.join(', ')}`;
+        }
         case 'linked-dependency':
             return `node_modules/${problem.dependency} es un enlace a ${problem.target}`;
         case 'copied-dependency':
@@ -282,7 +305,7 @@ export function formatReport(report: BussingReport): string {
         (report.ignored.length > 0 ? ` (${plural(report.ignored.length, 'ignorado', 'ignorados')}: ${report.ignored.map(function (dir) { return basename(dir); }).join(', ')})` : '')];
     for (const repo of [...withProblems, ...withWarningsOnly]) lines.push('', ...describeRepo(repo));
     if (report.cleanupOrder.length > 0) {
-        lines.push('', 'Orden de limpieza:', ...report.cleanupOrder.map(describeStep));
+        lines.push('', 'Pendientes:', ...report.cleanupOrder.map(describeStep));
     }
     if (report.warnings.length > 0) lines.push('', ...report.warnings.map(describeWarning));
     return lines.join('\n') + '\n';
@@ -296,7 +319,10 @@ export async function main(argv: string[]): Promise<number> {
             ignore: options.ignore,
             upTo: options.upTo,
             dependencyPriority: options.priority,
-            registry: createNpmRegistry(options.registry),
+            registry: createNpmRegistry(options.registry, {
+                ...(options.cache === null ? {} : { cacheDir: options.cache }),
+                maxAgeMs: options.cacheMaxAgeMs,
+            }),
             log: function (message) { if (process.stderr.isTTY) process.stderr.write(`\r\u001b[K${message}`); },
         };
         const report = await reviewEnvironment(reviewOptions);

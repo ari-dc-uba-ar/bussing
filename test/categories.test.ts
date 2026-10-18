@@ -4,7 +4,7 @@ import type { Problem } from '../src/types.js';
 
 describe('mainCategory', function () {
     const nobody = function (): boolean { return false; };
-    const outdated: Problem = { kind: 'outdated-dependency', dependency: 'b', field: 'devDependencies', declared: '^1.0.0', local: '1.1.0' };
+    const outdated: Problem = { kind: 'outdated-dependency', dependency: 'b', field: 'devDependencies', declared: '^1.0.0', local: '1.1.0', published: null };
     it('elige la categoría más grave', function () {
         assert.equal(mainCategory([], nobody), null);
         assert.equal(mainCategory([{ kind: 'not-published', version: '1.0.0' }, outdated, { kind: 'no-upstream', branch: 'main' }], nobody), 'unpushed');
@@ -16,9 +16,9 @@ describe('mainCategory', function () {
         assert.equal(mainCategory([outdated, { kind: 'unpushed', commits: 1 }], function () { return true; }), 'unpushed');
     });
     it('el campo de la dependencia pesa más que tener que esperarla', function () {
-        const productiva: Problem = { kind: 'outdated-dependency', dependency: 'c', field: 'dependencies', declared: '^1.0.0', local: '1.1.0' };
-        const peer: Problem = { kind: 'outdated-dependency', dependency: 'd', field: 'peerDependencies', declared: '^1.0.0', local: '1.1.0' };
-        const opcional: Problem = { kind: 'outdated-dependency', dependency: 'e', field: 'optionalDependencies', declared: '^1.0.0', local: '1.1.0' };
+        const productiva: Problem = { kind: 'outdated-dependency', dependency: 'c', field: 'dependencies', declared: '^1.0.0', local: '1.1.0', published: null };
+        const peer: Problem = { kind: 'outdated-dependency', dependency: 'd', field: 'peerDependencies', declared: '^1.0.0', local: '1.1.0', published: null };
+        const opcional: Problem = { kind: 'outdated-dependency', dependency: 'e', field: 'optionalDependencies', declared: '^1.0.0', local: '1.1.0', published: null };
         const todos = function (): boolean { return true; };
         assert.equal(mainCategory([outdated, productiva], todos), 'waiting-dependencies');
         assert.equal(mainCategory([outdated, productiva], function (name) { return name === 'b'; }), 'outdated-dependencies');

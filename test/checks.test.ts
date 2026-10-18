@@ -1,8 +1,9 @@
 import { strict as assert } from 'node:assert';
 import { symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { checkCrossDependencies, checkGit, checkInstallation, checkPublication, compareWithTarball, installedBinContent } from '../src/checks.js';
+import { checkDependencies, checkGit, checkInstallation, checkPublication, compareWithTarball, installedBinContent } from '../src/checks.js';
 import { getState } from '../src/git.js';
+import { packageMatcher, type NcuConfig } from '../src/ncurc.js';
 import { parsePackageJson } from '../src/repos.js';
 import { addRemote, fakeRegistry, filesMap, git, gitRepo, packageJson, packument, tempDir, writeFiles } from './helpers.js';
 
@@ -91,20 +92,47 @@ describe('checks', function () {
         });
     });
 
-    describe('checkCrossDependencies', function () {
-        it('informa las dependencias declaradas con una versión menor que la local', function () {
-            const pkg = parsePackageJson(packageJson({
-                name: 'a',
-                dependencies: { b: '^1.2.0', c: '^2.0.0', externo: '^1.0.0', d: 'file:../d' },
-                devDependencies: { e: '^1.0.0', a: '^0.0.1' },
-            }));
-            const local = new Map([['a', '1.0.0'], ['b', '1.3.0'], ['c', '2.0.0'], ['d', '1.0.0'], ['e', 'no-semver']]);
-            const result = checkCrossDependencies(pkg, local);
-            assert.deepEqual(result.problems, [{ kind: 'outdated-dependency', dependency: 'b', field: 'dependencies', declared: '^1.2.0', local: '1.3.0' }]);
-            assert.deepEqual(result.warnings.map(function (w) { return w.message; }), [
-                'd: la versión declarada "file:../d" (dependencies) no es un rango semver',
-                'e: la versión local "no-semver" no es semver',
+    describe('checkDependencies', function () {
+        const ncu = (target: NcuConfig['target'] = 'latest', reject: string | null = null): NcuConfig => ({ reject: reject === null ? null : packageMatcher(reject), filter: null, target });
+        const allFields = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'] as const;
+        const pkg = parsePackageJson(packageJson({
+            name: 'a',
+            dependencies: { b: '^1.2.0', c: '^2.0.0', externo: '^1.0.0', d: 'file:../d', f: '^1.0.0' },
+            devDependencies: { e: '^1.0.0', a: '^0.0.1' },
+        }));
+        const local = new Map([['a', '1.0.0'], ['b', '1.3.0'], ['c', '2.0.0'], ['d', '1.0.0'], ['e', 'no-semver']]);
+        const registry = fakeRegistry({
+            b: packument('b', { '1.2.0': {}, '1.2.5': {} }, '1.2.5'),
+            c: packument('c', { '2.0.0': {} }, '2.0.0'),
+            externo: packument('externo', { '1.0.0': {}, '1.4.0': {}, '2.0.0': {} }, '2.0.0'),
+        });
+        it('informa las desactualizadas respecto de la copia local y de npm, con las dos versiones', async function () {
+            const result = await checkDependencies(pkg, local, registry, ncu(), allFields);
+            assert.deepEqual(result.problems, [
+                { kind: 'outdated-dependency', dependency: 'b', field: 'dependencies', declared: '^1.2.0', local: '1.3.0', published: '1.2.5' },
+                { kind: 'outdated-dependency', dependency: 'externo', field: 'dependencies', declared: '^1.0.0', local: null, published: '2.0.0' },
             ]);
+            assert.deepEqual(result.warnings.map(function (warning) { return warning.message; }), [
+                'd: la versión declarada "file:../d" (dependencies) no es un rango semver',
+                'f no está publicado en npm',
+                'e: la versión local "no-semver" no es semver',
+                'e no está publicado en npm',
+            ]);
+        });
+        it('respeta target y reject de ncu, también para la copia local', async function () {
+            const minor = await checkDependencies(pkg, local, registry, ncu('minor'), ['dependencies']);
+            assert.deepEqual(minor.problems.map(function (problem) { return problem.kind === 'outdated-dependency' ? [problem.dependency, problem.published] : []; }), [['b', '1.2.5'], ['externo', '1.4.0']]);
+            const patch = await checkDependencies(pkg, new Map([['b', '1.3.0']]), registry, ncu('patch'), ['dependencies']);
+            assert.deepEqual(patch.problems.map(function (problem) { return problem.kind === 'outdated-dependency' ? [problem.dependency, problem.local, problem.published] : []; }), [['b', '1.3.0', '1.2.5']]);
+            const rejected = await checkDependencies(pkg, local, registry, ncu('latest', 'b, externo'), ['dependencies']);
+            assert.deepEqual(rejected.problems, []);
+        });
+        it('solo revisa los campos indicados e informa los errores de npm como advertencias', async function () {
+            const failing = fakeRegistry({});
+            failing.getVersions = async function () { throw new Error('sin red'); };
+            const result = await checkDependencies(pkg, new Map(), failing, ncu(), ['devDependencies']);
+            assert.deepEqual(result.problems, []);
+            assert.deepEqual(result.warnings.map(function (warning) { return warning.message; }), ['e: no se pudo consultar npm (sin red)']);
         });
     });
 

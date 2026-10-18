@@ -27,7 +27,7 @@ describe('bussing-cli', function () {
             const dir = await tempDir();
             const file = join(dir, 'd.yaml');
             await writeFile(file, 'paths: [a]\n');
-            assert.throws(function () { readDefaults(file, '~/x.yaml'); }, /^Error: ~\/x\.yaml tiene claves desconocidas: paths \(las claves válidas son: path, ignore, priority, up-to, dev, registry, json\)$/);
+            assert.throws(function () { readDefaults(file, '~/x.yaml'); }, /^Error: ~\/x\.yaml tiene claves desconocidas: paths \(las claves válidas son: path, ignore, priority, up-to, dev, registry, cache, cache-max-age, json\)$/);
             await writeFile(file, 'path: [a\n');
             assert.throws(function () { readDefaults(file, '~/x.yaml'); }, /^Error: ~\/x\.yaml no es un YAML válido/);
             await writeFile(file, '- a\n');
@@ -48,9 +48,9 @@ describe('bussing-cli', function () {
         function ignoreOutput(): void { /* nada */ }
         it('los parámetros tienen prioridad sobre los valores por omisión', function () {
             const defaults = { path: ['/d1', '/d2'], ignore: ['v'], priority: { d: 1 }, 'up-to': 'unpushed' as const, registry: 'https://d.example/', json: true };
-            assert.deepEqual(parseArgs([], defaults, ignoreOutput), { roots: [resolve('/d1'), resolve('/d2')], ignore: ['v'], upTo: 'unpushed', priority: { d: 1 }, registry: 'https://d.example/', json: true });
+            assert.deepEqual(parseArgs([], defaults, ignoreOutput), { roots: [resolve('/d1'), resolve('/d2')], ignore: ['v'], upTo: 'unpushed', priority: { d: 1 }, registry: 'https://d.example/', cache: null, cacheMaxAgeMs: 3600000, json: true });
             assert.deepEqual(parseArgs(['--path', '/a', '-p', '/b', '--ignore', 'x', '--ignore', 'y', '--priority', 'q=2', '--priority', 'r=-1', '--up-to', 'version-not-bumped', '--registry', 'https://a.example/'], defaults, ignoreOutput), {
-                roots: [resolve('/a'), resolve('/b')], ignore: ['x', 'y'], upTo: 'version-not-bumped', priority: { q: 2, r: -1 }, registry: 'https://a.example/', json: true,
+                roots: [resolve('/a'), resolve('/b')], ignore: ['x', 'y'], upTo: 'version-not-bumped', priority: { q: 2, r: -1 }, registry: 'https://a.example/', cache: null, cacheMaxAgeMs: 3600000, json: true,
             });
             assert.deepEqual(parseArgs(['-p', '/a', '--json'], {}, ignoreOutput).json, true);
         });
@@ -72,6 +72,13 @@ describe('bussing-cli', function () {
             assert.equal(parseCategory('unpublished'), 'unpublished');
             assert.throws(function () { parseCategory('nada', 'origen'); }, /^Error: origen nada no es una categoría/);
         });
+        it('caché en disco: carpeta relativa a la carpeta actual y vigencia en minutos', function () {
+            assert.deepEqual(parseArgs(['-p', '/a', '--cache', 'cache', '--cache-max-age', '5'], {}, ignoreOutput).cache, resolve('cache'));
+            assert.equal(parseArgs(['-p', '/a', '--cache-max-age', '5'], {}, ignoreOutput).cacheMaxAgeMs, 300000);
+            assert.equal(parseArgs(['-p', '/a'], { 'cache-max-age': 2 }, ignoreOutput).cacheMaxAgeMs, 120000);
+            assert.deepEqual(parseArgs(['-p', '/a'], { cache: '/c' }, ignoreOutput).cache, resolve('/c'));
+            assert.throws(function () { parseArgs(['-p', '/a', '--cache-max-age=-1'], {}, ignoreOutput); }, /^Error: --cache-max-age -1 no es una cantidad de minutos$/);
+        });
         it('parsePriority', function () {
             assert.deepEqual(parsePriority('qa-control=1'), ['qa-control', 1]);
             assert.deepEqual(parsePriority('@s/p=-3'), ['@s/p', -3]);
@@ -91,7 +98,7 @@ describe('bussing-cli', function () {
             { kind: 'not-published', version: '1.0.0' },
             { kind: 'unpublished-version', version: '1.0.0', latest: null },
             { kind: 'version-not-bumped', version: '1.0.0', commitsAfterPublish: 2 },
-            { kind: 'outdated-dependency', dependency: 'b', field: 'dependencies', declared: '^1.0.0', local: '1.1.0' },
+            { kind: 'outdated-dependency', dependency: 'b', field: 'dependencies', declared: '^1.0.0', local: '1.1.0', published: null },
             { kind: 'linked-dependency', dependency: 'b', target: '../b' },
             { kind: 'copied-dependency', dependency: 'b', version: '1.0.0', installedVersion: null, differences: [{ path: 'a.js', kind: 'modified' }] },
         ];
@@ -102,7 +109,7 @@ describe('bussing-cli', function () {
             'el paquete no está publicado en npm (versión local 1.0.0)',
             'versión 1.0.0 sin publicar (en npm: sin latest)',
             'versión 1.0.0 sin subir: 2 commits posteriores a la publicación',
-            'dependencia desactualizada: b "^1.0.0" (dependencies), versión local 1.1.0',
+            'dependencia desactualizada: b "^1.0.0" (dependencies); local 1.1.0',
             'node_modules/b es un enlace a ../b',
             'node_modules/b no coincide con la versión publicada 1.0.0 (el package.json instalado dice ?): a.js (modified)',
         ]);
@@ -131,7 +138,7 @@ describe('bussing-cli', function () {
             '/r/b',
             '  ? advertencia (repo): algo',
             '',
-            'Orden de limpieza:',
+            'Pendientes:',
             '  1. a  falta pushear  (ciclo: q se actualiza después)',
             '  2. x [x2]  por dependencia-peer  (depende de a; ciclo con y; ciclo: p, q se actualizan después)',
             '',

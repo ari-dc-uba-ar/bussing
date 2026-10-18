@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import type { Packument, Registry } from '../src/types.js';
+import type { PackageVersions, Packument, Registry } from '../src/types.js';
 
 export async function tempDir(): Promise<string> {
     return mkdtemp(join(tmpdir(), 'bussing-test-'));
@@ -47,6 +47,10 @@ export function fakeRegistry(packuments: Record<string, Packument>, tarballs: Re
         getPackument: async function (name: string): Promise<Packument | null> {
             return packuments[name] ?? null;
         },
+        getVersions: async function (name: string): Promise<PackageVersions | null> {
+            const found = packuments[name];
+            return found === undefined ? null : { name: found.name, distTags: found.distTags, versions: Object.keys(found.versions) };
+        },
         getTarballFiles: async function (url: string): Promise<Map<string, Uint8Array>> {
             const files = tarballs[url];
             if (files === undefined) throw new Error(`tarball inexistente en el registro falso: ${url}`);
@@ -56,7 +60,7 @@ export function fakeRegistry(packuments: Record<string, Packument>, tarballs: Re
 }
 
 export function packument(name: string, versions: Record<string, { gitHead?: string }>, latest?: string): Packument {
-    const result: Packument = { name, distTags: latest === undefined ? {} : { latest }, versions: {} };
+    const result: Packument = { name, distTags: latest === undefined ? {} : { latest }, versions: {}, time: {} };
     for (const [version, info] of Object.entries(versions)) {
         result.versions[version] = { version, gitHead: info.gitHead, tarball: `https://registry.example/${name}-${version}.tgz`, integrity: undefined };
     }

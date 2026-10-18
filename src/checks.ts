@@ -5,8 +5,9 @@ import { join } from 'node:path';
 import { guarantee, is } from 'guarantee-type';
 import semver from 'semver';
 import * as git from './git.js';
+import { allowedByTarget, isChecked, targetVersion, type NcuConfig } from './ncurc.js';
 import { declaredDependencies, readPackageJson, type PackageJson } from './repos.js';
-import type { CopyDifference, Problem, Registry, Warning } from './types.js';
+import type { CopyDifference, DependencyField, Problem, Registry, Warning } from './types.js';
 
 export interface CheckResult {
     problems: Problem[];
@@ -90,23 +91,47 @@ export async function checkPublication(dir: string, pkg: PackageJson, state: git
     return result;
 }
 
-// ---------------------------------------------------------------- dependencias cruzadas
+// ---------------------------------------------------------------- dependencias desactualizadas
 
 /** Versión local de cada paquete revisado (solo los nombres que corresponden a un único repositorio). */
 export type LocalVersions = Map<string, string>;
 
-export function checkCrossDependencies(pkg: PackageJson, localVersions: LocalVersions): CheckResult {
+/**
+ * Dependencias desactualizadas respecto de la versión local (si la dependencia es un repositorio revisado) y de la versión
+ * publicada en npm (según `target` de ncu). Las dependencias excluidas por `reject` o `filter` de ncu no se controlan.
+ * Solo se revisan los campos indicados en `fields`.
+ */
+export async function checkDependencies(pkg: PackageJson, localVersions: LocalVersions, registry: Registry, ncu: NcuConfig, fields: readonly DependencyField[]): Promise<CheckResult> {
     const result = emptyResult();
-    for (const dep of declaredDependencies(pkg)) {
-        const local = localVersions.get(dep.name);
-        if (local === undefined || dep.name === pkg.name) continue;
+    const warn = function (message: string): void { result.warnings.push({ check: 'cross-dependencies', message }); };
+    for (const dep of declaredDependencies(pkg, fields)) {
+        if (dep.name === pkg.name || !isChecked(ncu, dep.name)) continue;
         const minimum = semver.validRange(dep.spec) === null ? null : semver.minVersion(dep.spec);
         if (minimum === null) {
-            result.warnings.push({ check: 'cross-dependencies', message: `${dep.name}: la versión declarada "${dep.spec}" (${dep.field}) no es un rango semver` });
-        } else if (semver.valid(local) === null) {
-            result.warnings.push({ check: 'cross-dependencies', message: `${dep.name}: la versión local "${local}" no es semver` });
-        } else if (semver.lt(minimum, local)) {
-            result.problems.push({ kind: 'outdated-dependency', dependency: dep.name, field: dep.field, declared: dep.spec, local });
+            warn(`${dep.name}: la versión declarada "${dep.spec}" (${dep.field}) no es un rango semver`);
+            continue;
+        }
+        let local = localVersions.get(dep.name) ?? null;
+        if (local !== null && semver.valid(local) === null) {
+            warn(`${dep.name}: la versión local "${local}" no es semver`);
+            local = null;
+        }
+        let published: string | null = null;
+        try {
+            const versions = await registry.getVersions(dep.name);
+            if (versions === null) {
+                if (local === null) warn(`${dep.name} no está publicado en npm`);
+            } else {
+                const time = ncu.target === 'newest' ? (await registry.getPackument(dep.name))?.time ?? null : null;
+                published = targetVersion(ncu.target, versions, minimum.version, dep.spec, time);
+            }
+        } catch (err) {
+            warn(`${dep.name}: no se pudo consultar npm (${err instanceof Error ? err.message : String(err)})`);
+        }
+        const outdatedLocally = local !== null && allowedByTarget(ncu.target, local, minimum.version, dep.spec) && semver.lt(minimum, local);
+        const outdatedInNpm = published !== null && semver.valid(published) !== null && semver.lt(minimum, published);
+        if (outdatedLocally || outdatedInNpm) {
+            result.problems.push({ kind: 'outdated-dependency', dependency: dep.name, field: dep.field, declared: dep.spec, local, published });
         }
     }
     return result;

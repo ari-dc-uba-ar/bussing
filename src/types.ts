@@ -3,11 +3,20 @@
 /** Función que recibe los mensajes de progreso del core (el core nunca escribe en la salida). */
 export type LogFunction = (message: string) => void;
 
-/** Paquete tal como figura en el registro de npm (solo lo que bussing usa). */
+/** Paquete tal como figura en el registro de npm (documento completo; solo lo que bussing usa). */
 export interface Packument {
     name: string;
     distTags: Record<string, string>;
     versions: Record<string, PublishedVersion>;
+    /** Fecha de publicación de cada versión (además de `created` y `modified`). */
+    time: Record<string, string>;
+}
+
+/** Versiones publicadas de un paquete (documento abreviado del registro, sin fechas ni commits). */
+export interface PackageVersions {
+    name: string;
+    distTags: Record<string, string>;
+    versions: string[];
 }
 
 export interface PublishedVersion {
@@ -20,8 +29,10 @@ export interface PublishedVersion {
 
 /** Acceso al registro de npm. Se puede reemplazar (por ejemplo en los tests). */
 export interface Registry {
-    /** Devuelve `null` si el paquete no existe en el registro. */
+    /** Documento completo del paquete. Devuelve `null` si el paquete no existe en el registro. */
     getPackument(name: string): Promise<Packument | null>;
+    /** Versiones publicadas (documento abreviado, más liviano). Devuelve `null` si el paquete no existe en el registro. */
+    getVersions(name: string): Promise<PackageVersions | null>;
     /** Devuelve los archivos regulares del tarball, con la ruta relativa a la raíz del paquete. */
     getTarballFiles(tarballUrl: string, integrity: string | undefined): Promise<Map<string, Uint8Array>>;
 }
@@ -43,6 +54,8 @@ export interface BussingOptions {
     dependencyPriority?: Record<string, number>;
     /** Por omisión, el registro público de npm. */
     registry?: Registry;
+    /** Carpeta donde se busca la configuración de ncu del usuario (`.ncurc`); por omisión, la carpeta del usuario. */
+    ncuUserDir?: string;
     log?: LogFunction;
 }
 
@@ -62,7 +75,16 @@ export type Problem =
     | { kind: 'not-published'; version: string }
     | { kind: 'unpublished-version'; version: string; latest: string | null }
     | { kind: 'version-not-bumped'; version: string; commitsAfterPublish: number }
-    | { kind: 'outdated-dependency'; dependency: string; field: DependencyField; declared: string; local: string }
+    | {
+        kind: 'outdated-dependency';
+        dependency: string;
+        field: DependencyField;
+        declared: string;
+        /** Versión de la copia local (si la dependencia es un repositorio revisado), aunque no esté publicada. */
+        local: string | null;
+        /** Versión publicada en npm a la que habría que actualizar (según `target` de ncu). */
+        published: string | null;
+    }
     | { kind: 'linked-dependency'; dependency: string; target: string }
     | {
         kind: 'copied-dependency';
