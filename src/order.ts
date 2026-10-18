@@ -102,8 +102,23 @@ export function computeCleanupOrder(nodes: OrderNode[], priority: ReadonlyMap<st
         pending.push(...(dependents.get(dir) ?? []));
     }
     const dirs = [...included].sort();
-    const strongEdges = new Map(dirs.map(function (dir) {
-        return [dir, mustGet(byDir, dir).dependsOn.map(function (dep) { return dep.dir; }).filter(function (dep) { return included.has(dep); })] as const;
+    // Dependencias fuertes entre los de la lista, también a través de repositorios revisados que no están en la lista:
+    // si A depende de B y B de C, A va después de C aunque B esté limpio
+    const strongEdges = new Map<string, string[]>(dirs.map(function (dir): [string, string[]] {
+        const found = new Set<string>();
+        const visited = new Set<string>([dir]);
+        const pending = mustGet(byDir, dir).dependsOn.map(function (dep) { return dep.dir; });
+        while (pending.length > 0) {
+            const current = defined(pending.pop(), 'pendiente');
+            if (visited.has(current)) continue;
+            visited.add(current);
+            if (included.has(current)) {
+                found.add(current);
+            } else {
+                pending.push(...(byDir.get(current)?.dependsOn.map(function (dep) { return dep.dir; }) ?? []));
+            }
+        }
+        return [dir, [...found]];
     }));
     // Los ciclos de dependencias fuertes forman un solo paso
     const component = stronglyConnectedComponents(dirs, strongEdges);

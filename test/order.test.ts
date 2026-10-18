@@ -122,4 +122,15 @@ describe('computeCleanupOrder', function () {
         // sin prioridad se acepta primero a -> c (por nombre): c, después a y b (b depende de a)
         assert.deepEqual(sinPrioridad.map(function (step) { return step.name; }), ['c', 'a', 'b']);
     });
+    it('A -> B -> C ordena A después de C aunque B no esté en la lista', function () {
+        const steps = computeCleanupOrder([
+            { ...node('a', true, ['b']), reachesDependents: false },
+            node('b', false, ['c']),
+            { ...node('c', true), mainProblem: 'outdated-dev-dependencies', reachesDependents: false },
+        ]);
+        assert.deepEqual(steps.map(function (step) { return [step.level, step.name, step.dependsOn]; }), [
+            [0, 'c', []],
+            [1, 'a', ['c']],
+        ]);
+    });
 });
