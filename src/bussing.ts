@@ -59,7 +59,7 @@ export async function reviewEnvironment(options: BussingOptions): Promise<Bussin
     const ignore = options.ignore ?? [];
     const upTo = options.upTo ?? DEFAULT_UP_TO;
     const considered = function (category: ProblemCategory): boolean { return categoryWithin(category, upTo); };
-    const { repos: dirs, ignored } = await findRepos(options.roots, ignore);
+    const { repos: dirs, ignored } = await findRepos(options.roots, ignore, options.repos ?? []);
     for (const name of ignore) {
         if (!ignored.some(function (dir) { return basename(dir) === name; })) {
             warnings.push({ check: 'repo', message: `ninguna carpeta de repositorio se llama ${name} (ignore)` });

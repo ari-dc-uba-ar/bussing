@@ -16,19 +16,19 @@ describe('bussing-cli', function () {
         it('lee una lista de carpetas o una sola', async function () {
             const dir = await tempDir();
             const file = join(dir, 'd.yaml');
-            await writeFile(file, 'path:\n  - repos\n  - /absoluta\nignore: [viejo, otro]\npriority:\n  qa-control: 1\n  require-bro: -1\nregistry: https://r.example/\njson: true\n');
+            await writeFile(file, 'include:\n  - repos\n  - /absoluta\nignore: [viejo, otro]\npriority:\n  qa-control: 1\n  require-bro: -1\nregistry: https://r.example/\njson: true\n');
             assert.deepEqual(readDefaults(file, 'x'), {
-                path: ['repos', '/absoluta'], ignore: ['viejo', 'otro'], priority: { 'qa-control': 1, 'require-bro': -1 }, registry: 'https://r.example/', json: true,
+                include: ['repos', '/absoluta'], ignore: ['viejo', 'otro'], priority: { 'qa-control': 1, 'require-bro': -1 }, registry: 'https://r.example/', json: true,
             });
-            await writeFile(file, 'path: repos\nignore: viejo\n');
-            assert.deepEqual(readDefaults(file, 'x'), { path: ['repos'], ignore: ['viejo'] });
+            await writeFile(file, 'include: repos\nignore: viejo\n');
+            assert.deepEqual(readDefaults(file, 'x'), { include: ['repos'], ignore: ['viejo'] });
         });
         it('informa los errores comunes', async function () {
             const dir = await tempDir();
             const file = join(dir, 'd.yaml');
-            await writeFile(file, 'paths: [a]\n');
-            assert.throws(function () { readDefaults(file, '~/x.yaml'); }, /^Error: ~\/x\.yaml tiene claves desconocidas: paths \(las claves válidas son: path, ignore, priority, up-to, dev, registry, cache, cache-max-age, json\)$/);
-            await writeFile(file, 'path: [a\n');
+            await writeFile(file, 'path: [a]\n');
+            assert.throws(function () { readDefaults(file, '~/x.yaml'); }, /^Error: ~\/x\.yaml tiene claves desconocidas: path \(las claves válidas son: include, ignore, priority, up-to, dev, registry, cache, cache-max-age, json\)$/);
+            await writeFile(file, 'include: [a\n');
             assert.throws(function () { readDefaults(file, '~/x.yaml'); }, /^Error: ~\/x\.yaml no es un YAML válido/);
             await writeFile(file, '- a\n');
             assert.throws(function () { readDefaults(file, '~/x.yaml'); }, /^Error: ~\/x\.yaml no contiene claves y valores$/);
@@ -47,37 +47,42 @@ describe('bussing-cli', function () {
         /** Descarta la línea con la versión. */
         function ignoreOutput(): void { /* nada */ }
         it('los parámetros tienen prioridad sobre los valores por omisión', function () {
-            const defaults = { path: ['/d1', '/d2'], ignore: ['v'], priority: { d: 1 }, 'up-to': 'unpushed' as const, registry: 'https://d.example/', json: true };
-            assert.deepEqual(parseArgs([], defaults, ignoreOutput), { roots: [resolve('/d1'), resolve('/d2')], ignore: ['v'], upTo: 'unpushed', priority: { d: 1 }, registry: 'https://d.example/', cache: null, cacheMaxAgeMs: 3600000, json: true });
-            assert.deepEqual(parseArgs(['--path', '/a', '-p', '/b', '--ignore', 'x', '--ignore', 'y', '--priority', 'q=2', '--priority', 'r=-1', '--up-to', 'version-not-bumped', '--registry', 'https://a.example/'], defaults, ignoreOutput), {
-                roots: [resolve('/a'), resolve('/b')], ignore: ['x', 'y'], upTo: 'version-not-bumped', priority: { q: 2, r: -1 }, registry: 'https://a.example/', cache: null, cacheMaxAgeMs: 3600000, json: true,
+            const defaults = { include: ['/d1/*', '/d2'], ignore: ['v'], priority: { d: 1 }, 'up-to': 'unpushed' as const, registry: 'https://d.example/', json: true };
+            assert.deepEqual(parseArgs([], defaults, ignoreOutput), { roots: [resolve('/d1')], repos: [resolve('/d2')], ignore: ['v'], upTo: 'unpushed', priority: { d: 1 }, registry: 'https://d.example/', cache: null, cacheMaxAgeMs: 3600000, json: true });
+            assert.deepEqual(parseArgs(['--include', '/a', '-i', '/b/*', '--ignore', 'x', '--ignore', 'y', '--priority', 'q=2', '--priority', 'r=-1', '--up-to', 'version-not-bumped', '--registry', 'https://a.example/'], defaults, ignoreOutput), {
+                roots: [resolve('/b')], repos: [resolve('/a')], ignore: ['x', 'y'], upTo: 'version-not-bumped', priority: { q: 2, r: -1 }, registry: 'https://a.example/', cache: null, cacheMaxAgeMs: 3600000, json: true,
             });
-            assert.deepEqual(parseArgs(['-p', '/a', '--json'], {}, ignoreOutput).json, true);
+            assert.deepEqual(parseArgs(['-i', '/a', '--json'], {}, ignoreOutput).json, true);
         });
         it('las carpetas relativas son relativas a la carpeta actual', function () {
-            assert.deepEqual(parseArgs(['-p', 'a'], {}, ignoreOutput).roots, [join(process.cwd(), 'a')]);
-            assert.deepEqual(parseArgs([], { path: ['b'] }, ignoreOutput).roots, [join(process.cwd(), 'b')]);
+            assert.deepEqual(parseArgs(['-i', 'a'], {}, ignoreOutput).repos, [join(process.cwd(), 'a')]);
+            assert.deepEqual(parseArgs([], { include: ['b/*'] }, ignoreOutput).roots, [join(process.cwd(), 'b')]);
+        });
+        it('una carpeta terminada en /* indica revisar sus subcarpetas; sin /* es un repositorio', function () {
+            const options = parseArgs(['-i', '/r/*', '-i', '/s\\*', '-i', '/t', '-i', '/u*'], {}, ignoreOutput);
+            assert.deepEqual(options.roots, [resolve('/r'), resolve('/s')]);
+            assert.deepEqual(options.repos, [resolve('/t'), resolve('/u*')]);
         });
         it('umbral: por omisión hasta unpublished; --dev es un atajo de --up-to outdated-dev-dependencies', function () {
-            assert.equal(parseArgs(['-p', '/a'], {}, ignoreOutput).upTo, 'unpublished');
-            assert.equal(parseArgs(['-p', '/a', '--dev'], {}, ignoreOutput).upTo, 'outdated-dev-dependencies');
-            assert.equal(parseArgs(['-p', '/a'], { dev: true }, ignoreOutput).upTo, 'outdated-dev-dependencies');
-            assert.equal(parseArgs(['-p', '/a', '--dev=false'], { dev: true }, ignoreOutput).upTo, 'unpublished');
-            assert.equal(parseArgs(['-p', '/a', '--up-to', 'unpushed'], { dev: true }, ignoreOutput).upTo, 'unpushed');
-            assert.equal(parseArgs(['-p', '/a', '--dev'], { 'up-to': 'unpushed' }, ignoreOutput).upTo, 'outdated-dev-dependencies');
-            assert.throws(function () { parseArgs(['-p', '/a', '--dev', '--up-to', 'unpushed'], {}, ignoreOutput); }, /^Error: Se indicaron --dev y --up-to a la vez/);
-            assert.throws(function () { parseArgs(['-p', '/a', '--up-to', 'todo'], {}, ignoreOutput); }, /^Error: --up-to todo no es una categoría/);
+            assert.equal(parseArgs(['-i', '/a'], {}, ignoreOutput).upTo, 'unpublished');
+            assert.equal(parseArgs(['-i', '/a', '--dev'], {}, ignoreOutput).upTo, 'outdated-dev-dependencies');
+            assert.equal(parseArgs(['-i', '/a'], { dev: true }, ignoreOutput).upTo, 'outdated-dev-dependencies');
+            assert.equal(parseArgs(['-i', '/a', '--dev=false'], { dev: true }, ignoreOutput).upTo, 'unpublished');
+            assert.equal(parseArgs(['-i', '/a', '--up-to', 'unpushed'], { dev: true }, ignoreOutput).upTo, 'unpushed');
+            assert.equal(parseArgs(['-i', '/a', '--dev'], { 'up-to': 'unpushed' }, ignoreOutput).upTo, 'outdated-dev-dependencies');
+            assert.throws(function () { parseArgs(['-i', '/a', '--dev', '--up-to', 'unpushed'], {}, ignoreOutput); }, /^Error: Se indicaron --dev y --up-to a la vez/);
+            assert.throws(function () { parseArgs(['-i', '/a', '--up-to', 'todo'], {}, ignoreOutput); }, /^Error: --up-to todo no es una categoría/);
         });
         it('parseCategory', function () {
             assert.equal(parseCategory('unpublished'), 'unpublished');
             assert.throws(function () { parseCategory('nada', 'origen'); }, /^Error: origen nada no es una categoría/);
         });
         it('caché en disco: carpeta relativa a la carpeta actual y vigencia en minutos', function () {
-            assert.deepEqual(parseArgs(['-p', '/a', '--cache', 'cache', '--cache-max-age', '5'], {}, ignoreOutput).cache, resolve('cache'));
-            assert.equal(parseArgs(['-p', '/a', '--cache-max-age', '5'], {}, ignoreOutput).cacheMaxAgeMs, 300000);
-            assert.equal(parseArgs(['-p', '/a'], { 'cache-max-age': 2 }, ignoreOutput).cacheMaxAgeMs, 120000);
-            assert.deepEqual(parseArgs(['-p', '/a'], { cache: '/c' }, ignoreOutput).cache, resolve('/c'));
-            assert.throws(function () { parseArgs(['-p', '/a', '--cache-max-age=-1'], {}, ignoreOutput); }, /^Error: --cache-max-age -1 no es una cantidad de minutos$/);
+            assert.deepEqual(parseArgs(['-i', '/a', '--cache', 'cache', '--cache-max-age', '5'], {}, ignoreOutput).cache, resolve('cache'));
+            assert.equal(parseArgs(['-i', '/a', '--cache-max-age', '5'], {}, ignoreOutput).cacheMaxAgeMs, 300000);
+            assert.equal(parseArgs(['-i', '/a'], { 'cache-max-age': 2 }, ignoreOutput).cacheMaxAgeMs, 120000);
+            assert.deepEqual(parseArgs(['-i', '/a'], { cache: '/c' }, ignoreOutput).cache, resolve('/c'));
+            assert.throws(function () { parseArgs(['-i', '/a', '--cache-max-age=-1'], {}, ignoreOutput); }, /^Error: --cache-max-age -1 no es una cantidad de minutos$/);
         });
         it('parsePriority', function () {
             assert.deepEqual(parsePriority('qa-control=1'), ['qa-control', 1]);
@@ -86,7 +91,7 @@ describe('bussing-cli', function () {
             assert.throws(function () { parsePriority('x=uno'); }, /no tiene la forma/);
         });
         it('sin carpetas es un error', function () {
-            assert.throws(function () { parseArgs([], {}, ignoreOutput); }, /^Error: Falta indicar la carpeta con --path o definir los parámetros predeterminados en ~\/\.bussing\.yaml$/);
+            assert.throws(function () { parseArgs([], {}, ignoreOutput); }, /^Error: Falta indicar la carpeta con --include o definir los parámetros predeterminados en ~\/\.bussing\.yaml$/);
         });
     });
 
@@ -170,7 +175,7 @@ describe('bussing-cli', function () {
             const repos = join(home, 'repos');
             await mkdir(repos);
             await gitRepo(join(repos, 'x'), { 'package.json': packageJson({ name: 'x', version: '1.0.0', private: true }) });
-            await writeFile(join(home, '.bussing.yaml'), `path: ${JSON.stringify(repos)}\njson: true\n`);
+            await writeFile(join(home, '.bussing.yaml'), `include: ${JSON.stringify(repos + '/*')}\njson: true\n`);
             assert.equal(await main([]), EXIT_CODE.problems);
             const report: BussingReport = JSON.parse(stdout.join(''));
             assert.deepEqual(report.repos[0]?.problems, [{ kind: 'no-upstream', branch: 'main' }]);

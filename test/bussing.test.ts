@@ -47,6 +47,25 @@ describe('bussing', function () {
         assert.deepEqual(report.warnings, [{ check: 'repo', message: 'ninguna carpeta de repositorio se llama no-esta (ignore)' }]);
     });
 
+    it('revisa los repositorios indicados uno por uno, sin aplicarles ignore', async function () {
+        const npm = await tempDir();
+        const facu = await tempDir();
+        await gitRepo(join(npm, 'a'), { 'package.json': packageJson({ name: 'a', version: '1.0.0', private: true }) });
+        await gitRepo(join(npm, 'xlsx-now'), { 'package.json': packageJson({ name: 'xlsx-now', version: '0.1.0', private: true }) });
+        await gitRepo(join(facu, 'xlsx-now'), { 'package.json': packageJson({ name: 'xlsx-now', version: '1.0.0', private: true }) });
+        await gitRepo(join(facu, 'otro'), { 'package.json': packageJson({ name: 'otro', version: '1.0.0', private: true }) });
+        const report = await reviewEnvironment({
+            roots: [npm],
+            repos: [join(facu, 'xlsx-now'), join(facu, 'xlsx-now')],
+            ignore: ['xlsx-now'],
+            registry: fakeRegistry({}),
+        });
+        assert.deepEqual(report.repos.map(function (repo) { return repo.dir; }).sort(), [join(facu, 'xlsx-now'), join(npm, 'a')].sort());
+        assert.deepEqual(report.ignored, [join(npm, 'xlsx-now')]);
+        assert.deepEqual(report.warnings, []);
+        await assert.rejects(reviewEnvironment({ roots: [], repos: [join(facu, 'no-existe')] }), /La carpeta .*no-existe no existe/);
+    });
+
     it('advierte las prioridades de paquetes que no están entre los revisados', async function () {
         const root = await tempDir();
         await gitRepo(join(root, 'x'), { 'package.json': packageJson({ name: 'x', version: '1.0.0', private: true }) });

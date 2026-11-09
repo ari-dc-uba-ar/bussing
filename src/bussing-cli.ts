@@ -52,12 +52,15 @@ export function parseCategory(value: string, source = '--up-to'): ProblemCategor
     return category;
 }
 
+/** Final de una carpeta de `--include` que indica revisar sus subcarpetas directas: `/*` (o `\*`, en Windows). */
+const SUBFOLDERS_SUFFIX = /[/\\]\*$/;
+
 /** Parámetros de la línea de comandos. Las mismas claves se pueden usar en el archivo de valores por omisión. */
 const flags = {
-    path: {
+    include: {
         type: [String],
-        alias: 'p',
-        description: 'Carpeta raíz a revisar; se puede repetir (cada subcarpeta con package.json es un repositorio)',
+        alias: 'i',
+        description: 'Carpeta de un repositorio a revisar, o carpeta/* para revisar cada subcarpeta directa con package.json; se puede repetir',
     },
     ignore: {
         type: [String],
@@ -99,7 +102,7 @@ type FlagName = keyof typeof flags;
 /** Tipo de cada clave del archivo de valores por omisión: una por parámetro (el compilador verifica que sean las mismas). */
 const defaultsFields = {
     // una carpeta sola o una lista
-    path: { optional: is.union([is.string, is.array.string]) },
+    include: { optional: is.union([is.string, is.array.string]) },
     ignore: { optional: is.union([is.string, is.array.string]) },
     // en el archivo es un mapa paquete: número
     priority: is.optional.recordString.number,
@@ -115,11 +118,14 @@ const defaultsDescription = is.object(defaultsFields);
 
 type DefaultsFile = GuaranteedType<typeof defaultsDescription>;
 
-/** Valores por omisión ya normalizados: `path` e `ignore` siempre son listas y `up-to` es una categoría válida. */
-export type Defaults = Omit<DefaultsFile, 'path' | 'ignore' | 'up-to'> & { path?: string[]; ignore?: string[]; 'up-to'?: ProblemCategory };
+/** Valores por omisión ya normalizados: `include` e `ignore` siempre son listas y `up-to` es una categoría válida. */
+export type Defaults = Omit<DefaultsFile, 'include' | 'ignore' | 'up-to'> & { include?: string[]; ignore?: string[]; 'up-to'?: ProblemCategory };
 
 export interface CliOptions {
+    /** Carpetas indicadas con `/*`: cada subcarpeta directa con package.json es un repositorio. */
     roots: string[];
+    /** Carpetas indicadas sin `/*`: cada una es un repositorio. */
+    repos: string[];
     ignore: string[];
     upTo: ProblemCategory;
     priority: Record<string, number>;
@@ -157,9 +163,9 @@ export function readDefaults(file: string, label: string): Defaults {
     } catch (err) {
         throw new Error(`${label} tiene valores de tipo incorrecto (${err instanceof Error ? err.message : String(err)})`);
     }
-    const { path, ignore, 'up-to': upTo, ...others } = values;
+    const { include, ignore, 'up-to': upTo, ...others } = values;
     const defaults: Defaults = others;
-    if (path !== undefined) defaults.path = typeof path === 'string' ? [path] : path;
+    if (include !== undefined) defaults.include = typeof include === 'string' ? [include] : include;
     if (ignore !== undefined) defaults.ignore = typeof ignore === 'string' ? [ignore] : ignore;
     if (upTo !== undefined) defaults['up-to'] = parseCategory(upTo, `${label} up-to`);
     if (defaults.dev !== undefined && upTo !== undefined) throw new Error(`${label} tiene dev y up-to a la vez (dev equivale a up-to ${DEV_UP_TO})`);
@@ -175,7 +181,7 @@ export function parseArgs(argv: string[], defaults: Defaults, write?: (text: str
         moduleUrl: import.meta.url,
         description: 'Revisa los repositorios locales y muestra los que quedaron desprolijos y el orden en que conviene limpiarlos.\n' +
             `Los valores por omisión de los parámetros se pueden definir en ${DEFAULTS_FILE_LABEL} (las claves son los nombres de los parámetros).`,
-        examples: ['bussing --path ../repos --path ../otros-repos --ignore repo-viejo', 'bussing --priority qa-control=1 --priority require-bro=-1', 'bussing --json'],
+        examples: ['bussing --include "../repos/*" --include "../otros-repos/*" --include ../un-proyecto --ignore repo-viejo', 'bussing --priority qa-control=1 --priority require-bro=-1', 'bussing --json'],
         exitCodes: EXIT_CODES,
         argv,
     }, function (base, argv) {
@@ -185,9 +191,16 @@ export function parseArgs(argv: string[], defaults: Defaults, write?: (text: str
         ...(write === undefined ? {} : { write }),
     });
     // las carpetas relativas son relativas a la carpeta actual, vengan de la línea de comandos o del archivo
-    const roots = (parsed.flags.path.length > 0 ? parsed.flags.path : defaults.path ?? []).map(function (path) { return resolve(path); });
-    if (roots.length === 0) {
-        throw new Error(`Falta indicar la carpeta con --path o definir los parámetros predeterminados en ${DEFAULTS_FILE_LABEL}`);
+    const paths = parsed.flags.include.length > 0 ? parsed.flags.include : defaults.include ?? [];
+    const roots: string[] = [];
+    const repos: string[] = [];
+    for (const path of paths) {
+        const subfolders = SUBFOLDERS_SUFFIX.exec(path);
+        if (subfolders === null) repos.push(resolve(path));
+        else roots.push(resolve(path.slice(0, subfolders.index)));
+    }
+    if (paths.length === 0) {
+        throw new Error(`Falta indicar la carpeta con --include o definir los parámetros predeterminados en ${DEFAULTS_FILE_LABEL}`);
     }
     const flagUpTo = parsed.flags['up-to'];
     const flagDev = parsed.flags.dev;
@@ -200,6 +213,7 @@ export function parseArgs(argv: string[], defaults: Defaults, write?: (text: str
     if (cacheMaxAge !== undefined && !(cacheMaxAge >= 0)) throw new Error(`--cache-max-age ${cacheMaxAge} no es una cantidad de minutos`);
     return {
         roots,
+        repos,
         ignore: parsed.flags.ignore.length > 0 ? parsed.flags.ignore : defaults.ignore ?? [],
         upTo,
         priority: parsed.flags.priority.length > 0 ? Object.fromEntries(parsed.flags.priority) : defaults.priority ?? {},
@@ -316,6 +330,7 @@ export async function main(argv: string[]): Promise<number> {
         const options = parseArgs(argv, readDefaults(defaultsPath(), DEFAULTS_FILE_LABEL));
         const reviewOptions: BussingOptions = {
             roots: options.roots,
+            repos: options.repos,
             ignore: options.ignore,
             upTo: options.upTo,
             dependencyPriority: options.priority,

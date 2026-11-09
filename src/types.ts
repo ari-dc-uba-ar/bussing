@@ -40,6 +40,8 @@ export interface Registry {
 export interface BussingOptions {
     /** Carpetas raíz; cada subcarpeta directa con `package.json` es un repositorio a revisar. */
     roots: string[];
+    /** Repositorios a revisar indicados uno por uno; no se les aplica `ignore`. */
+    repos?: string[];
     /** Nombres de subcarpetas que no se revisan. */
     ignore?: string[];
     /**

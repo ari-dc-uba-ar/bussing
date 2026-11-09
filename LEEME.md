@@ -27,7 +27,7 @@ también disponible en:
 
 ## Repositorios revisados
 
-Las carpetas raíz se indican con `--path` (se puede repetir). Cada subcarpeta de una carpeta raíz que tenga `package.json` es un repositorio a revisar, salvo las que se llamen como alguno de los valores de `--ignore` (también se puede repetir).
+Los repositorios a revisar se indican con `--include` (se puede repetir). Una carpeta terminada en `/*` indica revisar cada una de sus subcarpetas directas que tenga `package.json`, salvo las que se llamen como alguno de los valores de `--ignore` (también se puede repetir). Una carpeta sin `/*` es en sí misma un repositorio a revisar, y `--ignore` no se le aplica. En la línea de comandos las carpetas con `/*` van entre comillas, para que la consola no las expanda.
 
 ## Valores por omisión
 
@@ -36,9 +36,10 @@ El archivo opcional `~/.bussing.yaml` define valores por omisión para los pará
 Las consultas a npm se guardan en memoria durante la corrida. Con `--cache <carpeta>` (o `cache` en el archivo) se guardan también en disco: los documentos de cada paquete vencen a los `--cache-max-age` minutos (por omisión 60) y los tarballs no vencen.
 
 ```yaml
-path:
-  - /path/to/repos
-  - /path/to/other-repos
+include:
+  - /path/to/repos/*
+  - /path/to/other-repos/*
+  - /path/to/one-project
 ignore:
   - old-repo
 priority:
@@ -99,7 +100,7 @@ Con `--up-to <clave>` se elige la categoría menos grave que interesa; las menos
 ### Línea de comandos
 
 ```sh
-bussing --path /path/to/repos --path /path/to/other-repos
+bussing --include "/path/to/repos/*" --include /path/to/one-project
 bussing --json
 ```
 
@@ -119,7 +120,7 @@ const report = await reviewEnvironment({ roots: ['/path/to/repos'] });
 
 ## Reviewed repositories
 
-The root folders are set with `--path` (it can be repeated). Every subfolder of a root folder that has a `package.json` is a repository to review, except those named as one of the values of `--ignore` (it can be repeated too).
+The repositories to review are set with `--include` (it can be repeated). A folder ending in `/*` means reviewing each of its direct subfolders that has a `package.json`, except those named as one of the values of `--ignore` (it can be repeated too). A folder without `/*` is itself a repository to review, and `--ignore` does not apply to it. On the command line, folders with `/*` go between quotes, so that the shell does not expand them.
 
 ## Default values
 
@@ -128,9 +129,10 @@ The optional file `~/.bussing.yaml` sets default values for the parameters; the 
 npm queries are kept in memory during the run. With `--cache <folder>` (or `cache` in the file) they are also stored on disk: package documents expire after `--cache-max-age` minutes (60 by default) and tarballs never expire.
 
 ```yaml
-path:
-  - /path/to/repos
-  - /path/to/other-repos
+include:
+  - /path/to/repos/*
+  - /path/to/other-repos/*
+  - /path/to/one-project
 ignore:
   - old-repo
 priority:
@@ -191,7 +193,7 @@ Each step shows the most serious problem of the repository. From most to least s
 ### Command line
 
 ```sh
-bussing --path /path/to/repos --path /path/to/other-repos
+bussing --include "/path/to/repos/*" --include /path/to/one-project
 bussing --json
 ```
 
